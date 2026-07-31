@@ -1,0 +1,210 @@
+// @ts-nocheck
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+
+type OnboardingPayload = {
+  business_name?: string
+  description?: string
+  phone?: string
+  address?: string
+  lat?: number
+  lng?: number
+  delivery_modes: string[]
+  mode_selections: {
+    mode_id: string
+    targets: string[]
+    categories: string[]
+    services: {
+      service_id: string
+      competence_rating: number
+    }[]
+  }[]
+}
+
+function resolveServiceModeId(deliveryModes: string[]): "home" | "provider" | "both" {
+  const normalized = (deliveryModes || []).map((m) => String(m).toLowerCase())
+  const hasHome = normalized.includes("home")
+  const hasProvider = normalized.includes("provider") || normalized.includes("at_provider")
+  if (hasHome && hasProvider) return "both"
+  if (hasProvider) return "provider"
+  return "home"
+}
+
+Deno.serve(async (req) => {
+  if (req.method !== "POST") {
+    return new Response(JSON.stringify({ error: "Method Not Allowed" }), {
+      status: 405,
+      headers: { "Content-Type": "application/json" },
+    })
+  }
+
+  try {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? ""
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+    if (!supabaseUrl || !serviceRoleKey) {
+      return new Response(JSON.stringify({ error: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      })
+    }
+
+    const providerId = req.headers.get("x-provider-id")
+    if (!providerId) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      })
+    }
+
+    const payload = (await req.json()) as OnboardingPayload
+    if (!payload.mode_selections || payload.mode_selections.length === 0) {
+      return new Response(JSON.stringify({ error: "Must select at least one mode" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      })
+    }
+
+    const supabase = createClient(supabaseUrl, serviceRoleKey, {
+      auth: { persistSession: false },
+    })
+
+    const { error: detailsError } = await supabase.from("provider_details").upsert({
+      id: providerId,
+      business_name: payload.business_name,
+      description: payload.description,
+      phone: payload.phone,
+      address: payload.address,
+      lat: payload.lat,
+      lng: payload.lng,
+      delivery_modes: payload.delivery_modes,
+    })
+    if (detailsError) throw detailsError
+
+    // Keep local onboarding resilient if static references are empty.
+    const serviceModeId = resolveServiceModeId(payload.delivery_modes || [])
+
+    for (const modeSelection of payload.mode_selections) {
+      for (const targetId of modeSelection.targets || []) {
+        await supabase
+          .from("provider_skills")
+          .delete()
+          .eq("provider_id", providerId)
+          .eq("mode_id", modeSelection.mode_id)
+          .eq("target_id", targetId)
+      }
+
+      const { error: modeRefErr } = await supabase.from("modes").upsert(
+        { id: modeSelection.mode_id, label: modeSelection.mode_id, icon: "dot" },
+        { onConflict: "id" },
+      )
+      if (modeRefErr) throw modeRefErr
+
+      for (const targetId of modeSelection.targets) {
+        const { error: targetRefErr } = await supabase.from("targets").upsert(
+          {
+            id: targetId,
+            mode_id: modeSelection.mode_id,
+            label: targetId,
+            icon: "dot",
+          },
+          { onConflict: "id" },
+        )
+        if (targetRefErr) throw targetRefErr
+      }
+
+      for (const categoryId of modeSelection.categories) {
+        const primaryTargetId = modeSelection.targets[0]
+        const { error: categoryRefErr } = await supabase.from("categories").upsert(
+          {
+            id: categoryId,
+            mode_id: modeSelection.mode_id,
+            target_id: primaryTargetId,
+            label: categoryId,
+          },
+          { onConflict: "id" },
+        )
+        if (categoryRefErr) throw categoryRefErr
+      }
+
+      for (const service of modeSelection.services) {
+        const primaryTargetId = modeSelection.targets[0]
+        const primaryCategoryId = modeSelection.categories[0]
+        const { error: serviceRefErr } = await supabase.from("services").upsert(
+          {
+            id: service.service_id,
+            mode_id: modeSelection.mode_id,
+            target_id: primaryTargetId,
+            category_id: primaryCategoryId,
+            name: service.service_id,
+            duration_minutes: 30,
+          },
+          { onConflict: "id" },
+        )
+        if (serviceRefErr) throw serviceRefErr
+      }
+    }
+
+    for (const modeSelection of payload.mode_selections) {
+      const { error: modeErr } = await supabase.from("provider_modes").upsert(
+        { provider_id: providerId, mode_id: modeSelection.mode_id },
+        { onConflict: "provider_id,mode_id" },
+      )
+      if (modeErr) throw modeErr
+
+      for (const targetId of modeSelection.targets) {
+        const { error: targetErr } = await supabase.from("provider_targets").upsert(
+          { provider_id: providerId, target_id: targetId },
+          { onConflict: "provider_id,target_id" },
+        )
+        if (targetErr) throw targetErr
+      }
+
+      for (const categoryId of modeSelection.categories) {
+        const { error: categoryErr } = await supabase.from("provider_categories").upsert(
+          { provider_id: providerId, category_id: categoryId },
+          { onConflict: "provider_id,category_id" },
+        )
+        if (categoryErr) throw categoryErr
+      }
+
+      for (const service of modeSelection.services) {
+        const primaryTargetId = modeSelection.targets[0] ?? null
+        const primaryCategoryId = modeSelection.categories[0] ?? null
+        const { error: skillErr } = await supabase.from("provider_skills").upsert(
+          {
+            provider_id: providerId,
+            service_id: service.service_id,
+            competence_rating: service.competence_rating,
+            mode_id: modeSelection.mode_id,
+            target_id: primaryTargetId,
+            category_id: primaryCategoryId,
+            service_mode_id: serviceModeId,
+          },
+          { onConflict: "provider_id,service_id" },
+        )
+        if (skillErr) throw skillErr
+      }
+    }
+
+    await supabase.from("order_events").insert([
+      {
+        event_type: "provider_onboarded",
+        actor_id: providerId,
+        metadata: {
+          modes: payload.mode_selections.map((m) => m.mode_id),
+          services_count: payload.mode_selections.reduce((sum, m) => sum + m.services.length, 0),
+        },
+      },
+    ])
+
+    return new Response(JSON.stringify({ success: true, provider_id: providerId }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })
+  } catch (error) {
+    console.error("[provider-onboard] error:", error)
+    return new Response(JSON.stringify({ error: "Failed to onboard provider" }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    })
+  }
+})

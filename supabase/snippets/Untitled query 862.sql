@@ -1,0 +1,1 @@
+select id, label from public.service_modes order by id;;

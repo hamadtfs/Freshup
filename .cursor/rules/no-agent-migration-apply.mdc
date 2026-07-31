@@ -1,0 +1,12 @@
+---
+description: Prevent agent from applying migrations directly
+alwaysApply: true
+---
+
+# Migration Execution Policy
+
+- Never run migration application commands directly.
+- Do not execute commands such as `supabase db push`, `supabase db reset`, `supabase migration up`, `supabase db remote commit`, or `psql` migration apply scripts.
+- The agent may create and edit migration files, lint SQL, and review migration content.
+- Migration execution is always manual by the user.
+- If a task would require applying migrations, stop after preparing files and explicitly ask the user to run the migration manually.
