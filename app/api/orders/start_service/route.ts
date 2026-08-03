@@ -63,6 +63,33 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    try {
+      const { data: orderForPush } = await supabase
+        .from("orders")
+        .select("customer_id")
+        .eq("id", orderId)
+        .maybeSingle();
+      const customerId = orderForPush?.customer_id
+        ? String(orderForPush.customer_id)
+        : "";
+      if (customerId) {
+        void import("@/lib/notifications/expo-push").then(({ notifyUsers }) =>
+          notifyUsers({
+            userIds: [customerId],
+            title: "Order update",
+            body: "Your service has started.",
+            data: {
+              type: "order_status",
+              order_id: orderId,
+              status: "in_progress",
+            },
+          }),
+        );
+      }
+    } catch (e) {
+      console.error("[start_service] push notify", e);
+    }
+
     return NextResponse.json({ ok: true, started_at: now });
   } catch (e) {
     console.error("[start_service]", e);

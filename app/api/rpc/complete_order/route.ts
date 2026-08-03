@@ -149,6 +149,33 @@ export async function POST(req: Request) {
       // wallet ledger is best-effort
     }
 
+    try {
+      const { data: orderForPush } = await supabase
+        .from("orders")
+        .select("customer_id")
+        .eq("id", orderId)
+        .maybeSingle();
+      const customerId = orderForPush?.customer_id
+        ? String(orderForPush.customer_id)
+        : "";
+      if (customerId) {
+        void import("@/lib/notifications/expo-push").then(({ notifyUsers }) =>
+          notifyUsers({
+            userIds: [customerId],
+            title: "Service completed",
+            body: "Your Fresh Up job is done. Thanks for booking!",
+            data: {
+              type: "order_status",
+              order_id: orderId,
+              status: "completed",
+            },
+          }),
+        );
+      }
+    } catch (e) {
+      console.error("[complete_order] push notify", e);
+    }
+
     return NextResponse.json({ ok: true, captured, error: captureError });
   } catch {
     return NextResponse.json(
