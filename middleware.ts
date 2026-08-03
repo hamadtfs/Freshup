@@ -15,6 +15,12 @@ const APP_SUBPAGES = new Set([
   "report",
 ]);
 
+function withNoIndex(res: NextResponse): NextResponse {
+  // Temporary/public deploys must not be indexed (client requirement).
+  res.headers.set("X-Robots-Tag", "noindex, nofollow");
+  return res;
+}
+
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const slug = pathname.replace(/^\/+|\/+$/g, "");
@@ -22,12 +28,12 @@ export function middleware(req: NextRequest) {
   if (APP_SUBPAGES.has(slug)) {
     const url = req.nextUrl.clone();
     url.pathname = "/";
-    return NextResponse.rewrite(url);
+    return withNoIndex(NextResponse.rewrite(url));
   }
 
-  return NextResponse.next();
+  return withNoIndex(NextResponse.next());
 }
 
 export const config = {
-  matcher: ["/((?!api|_next|favicon.ico).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };

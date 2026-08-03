@@ -135,6 +135,34 @@ export async function POST(req: NextRequest) {
       .update({ updated_at: new Date().toISOString() })
       .eq("id", conversationId)
 
+    try {
+      const { data: peers } = await supabase
+        .from("conversation_participants")
+        .select("user_id")
+        .eq("conversation_id", conversationId)
+        .is("left_at", null)
+        .neq("user_id", userId)
+      const recipientIds = (peers || [])
+        .map((p) => String(p.user_id || "").trim())
+        .filter(Boolean)
+      if (recipientIds.length > 0) {
+        const preview = text.length > 120 ? `${text.slice(0, 117)}...` : text
+        void import("@/lib/notifications/expo-push").then(({ notifyUsers }) =>
+          notifyUsers({
+            userIds: recipientIds,
+            title: "Support message",
+            body: preview,
+            data: {
+              type: "support_message",
+              conversation_id: conversationId,
+            },
+          }),
+        )
+      }
+    } catch (e) {
+      console.error("[support/messages] push notify", e)
+    }
+
     return NextResponse.json({
       message: mapDbMessageToUi(data, userId, language),
     })

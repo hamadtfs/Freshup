@@ -147,6 +147,38 @@ export async function POST(req: Request) {
       // observability only
     }
 
+    try {
+      const { data: orderForPush } = await supabase
+        .from("orders")
+        .select("customer_id")
+        .eq("id", orderId)
+        .maybeSingle();
+      const customerId = orderForPush?.customer_id
+        ? String(orderForPush.customer_id)
+        : "";
+      if (customerId) {
+        const statusCopy: Record<ProviderTransitionStatus, string> = {
+          en_route: "Your provider is on the way.",
+          arrived: "Your provider has arrived.",
+          in_progress: "Your service has started.",
+        };
+        void import("@/lib/notifications/expo-push").then(({ notifyUsers }) =>
+          notifyUsers({
+            userIds: [customerId],
+            title: "Order update",
+            body: statusCopy[next],
+            data: {
+              type: "order_status",
+              order_id: orderId,
+              status: next,
+            },
+          }),
+        );
+      }
+    } catch (e) {
+      console.error("[transition] push notify", e);
+    }
+
     return NextResponse.json({
       ok: true,
       order_id: orderId,

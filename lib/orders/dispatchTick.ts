@@ -418,6 +418,18 @@ export async function dispatchTick(
               .insert(toInsert);
             if (insertErr) throw insertErr;
             totalOffersSent += toInsert.length;
+
+            void import("@/lib/notifications/expo-push").then(({ notifyUsers }) =>
+              notifyUsers({
+                userIds: toInsert.map((r) => r.provider_id),
+                title: "New job offer",
+                body: "A nearby customer needs help. Open Fresh Up to accept.",
+                data: {
+                  type: "new_offer",
+                  order_id: orderId,
+                },
+              }),
+            );
           }
 
           waveOutcomes.push({

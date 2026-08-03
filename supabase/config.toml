@@ -390,6 +390,11 @@ deno_version = 2
 [functions.send-sms-hook]
 verify_jwt = false
 
+# Dispatch tick: JWT off; inbound auth is x-dispatch-secret (same as Next.js).
+# Deploy: supabase functions deploy dispatch-tick-cron --no-verify-jwt
+[functions.dispatch-tick-cron]
+verify_jwt = false
+
 # SECURITY 2026-07-20: function temporarily disabled (deny stub). JWT on.
 # Previous verify_jwt=false + x-provider-id trust was a vulnerability.
 [functions.provider-onboard]
