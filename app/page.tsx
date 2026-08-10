@@ -17156,7 +17156,7 @@ export default function Page() {
             className="h-12 w-12 rounded-full glass-morphism-strong hover:glass-morphism-strong text-gray-800 shadow-lg border-0"
             onClick={() => setShowChat(true)}
           >
-            <span className="text-lg">💬</span>
+            <MessageCircle className="h-5 w-5" strokeWidth={2.25} />
           </Button>
         </div>
       )}
