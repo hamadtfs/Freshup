@@ -3,7 +3,7 @@
 import type React from "react";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -12,7 +12,16 @@ import {
   readStoredDashboardMode,
   writeStoredDashboardMode,
 } from "@/lib/auth/dashboard-mode";
+import { fetchAccountRoles, setActiveRoleClaim } from "@/lib/auth/fetch-account-roles";
+import {
+  metadataRoleFromUser,
+  pickDashboardMode,
+} from "@/lib/auth/resolve-account-roles";
 import { clearOAuthPending } from "@/lib/auth/oauth-pending";
+import {
+  clearProviderSignupInProgress,
+  isProviderSignupInProgress,
+} from "@/lib/auth/provider-signup-gate";
 import {
   Scissors,
   X,
@@ -30,7 +39,6 @@ import {
   Lock,
   MessageSquare,
   MessageCircle,
-  Siren,
   LocateFixed,
   Camera,
   Play,
@@ -38,7 +46,6 @@ import {
   XCircle,
   Loader2,
 } from "lucide-react";
-import { useOrderChatUnread } from "@/lib/chat/use-order-chat-unread";
 import { offerCountdownSeconds } from "@/lib/orders/offerCountdown";
 import {
   formatMmSs,
@@ -48,6 +55,7 @@ import { computeServiceElapsedSeconds } from "@/lib/orders/serviceElapsed";
 import { ProviderOnlineToggle } from "@/components/provider-online-toggle";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { SERVICE_ID_ALIASES } from "@/lib/service-id";
+import { isEquipmentDependentAddon } from "@/lib/catalog/equipment-addons";
 import { DISPATCH_PROVIDER_OFFER_TTL_MS } from "@/lib/orders/dispatchTiming";
 import {
   CATEGORIES,
@@ -72,6 +80,7 @@ import OrderChatModal from "@/components/order-chat-modal";
 import PaymentPage from "@/components/payment-page";
 import EarningsPage from "@/components/earnings-page";
 import WalletPage from "@/components/wallet-page";
+import AdminVerificationsPage from "@/components/admin-verifications-page";
 import SkillsPage from "@/components/skills-page";
 import ProfilePage from "@/components/profile-page";
 import ChatPage from "@/components/chat-page";
@@ -117,19 +126,19 @@ import { parseOfferDistanceKm as parseOfferMatchDistanceKm } from "@/lib/maps/re
 import {
   LIVE_LOCATION_MIN_MOVE_M,
   LIVE_LOCATION_PUBLISH_MS,
+  customerUiStatusPublishesLiveLocation,
   customerUiStatusShowsProviderLiveLocation,
   providerJobStepPublishesLiveLocation,
 } from "@/lib/constants/live-location";
+import {
+  REALTIME_SAFETY_POLL_MS,
+  createAdaptivePoll,
+  isRealtimeDownStatus,
+} from "@/lib/realtime/adaptive-poll";
 import { DISPATCH_TIER_GAP_MS } from "@/lib/orders/dispatchTiming";
 import { maxDeliveryFeeAtDispatchRadius } from "@/lib/payments/delivery-ceiling";
 import { authorizeAmountFromPriceLock } from "@/lib/payments/payment-amounts";
 import { runBookingPaymentFlow } from "@/lib/payments/booking-payment-client";
-import {
-  advanceSimulatedFleet,
-  desiredSimulatedFleetCount,
-  seedSimulatedFleet,
-  type SimulatedFleetUnit,
-} from "@/lib/maps/simulated-fleet";
 
 /** Customer status poll while hunting — slightly after each 3s dispatch wave. */
 const CUSTOMER_SEARCH_STATUS_POLL_MS = DISPATCH_TIER_GAP_MS + 500;
@@ -145,6 +154,19 @@ const MapView = dynamic(() => import("@/components/map-view"), { ssr: false });
 type LatLng = { lat: number; lng: number };
 const OSLO_DEFAULT: LatLng = { lat: 59.9139, lng: 10.7522 };
 // const OSLO_DEFAULT: LatLng = { lat: 31.5204, lng: 74.3587 };
+
+/** Prefer live GPS when saved profile location is far away (common in two-browser local testing). */
+function pickMarketDetectionCoords(
+  saved: LatLng | null,
+  live: LatLng | null,
+  maxKm = 10,
+): LatLng | null {
+  if (saved && live) {
+    if (haversineKm(saved, live) > maxKm) return live;
+    return saved;
+  }
+  return saved ?? live ?? null;
+}
 
 function isSameLatLng(
   a: LatLng | null | undefined,
@@ -680,7 +702,7 @@ function buildOfferCustomer(
     avatar: "👤",
     avatarUrl: readContactAvatarUrl(apiCustomer),
     rating: 4.8,
-    phone: "",
+    phone: String(apiCustomer?.phone ?? "").trim(),
   };
 }
 
@@ -715,14 +737,6 @@ async function fetchOrderCustomerParty(
   }
 }
 
-function isPlaceholderCustomerName(name: string, language: Language): boolean {
-  const trimmed = String(name || "").trim();
-  if (!trimmed) return true;
-  return language === "en"
-    ? /^Customer\s+[a-f0-9-]{4,}/i.test(trimmed)
-    : /^Kunde\s+[a-f0-9-]{4,}/i.test(trimmed);
-}
-
 function isPlaceholderServiceName(name: string, language: Language): boolean {
   const trimmed = String(name || "").trim();
   if (!trimmed) return true;
@@ -739,11 +753,11 @@ function isProviderOfferFullyHydrated(
   if (!offer) return false;
   const serviceName = String(offer.service?.name || "").trim();
   const customerName = String(offer.customer?.name || "").trim();
+  // Require a real service label. Allow fallback customer labels like
+  // "Customer 362ae9" — many profiles have null display_name, and blocking
+  // on that hid the offer sheet after customer-info already succeeded.
   if (!serviceName || !customerName) return false;
-  return (
-    !isPlaceholderServiceName(serviceName, language) &&
-    !isPlaceholderCustomerName(customerName, language)
-  );
+  return !isPlaceholderServiceName(serviceName, language);
 }
 
 async function resolveProviderAccessToken(
@@ -812,6 +826,7 @@ function resolveCustomerProviderFromStatus(
     code: `${codePrefix}${codeNum}`,
     distanceKm,
     avatarUrl: readProviderAvatarUrl(providerData),
+    phone: String(providerData.phone ?? "").trim() || null,
   };
 }
 
@@ -1097,9 +1112,7 @@ function resolveUserModeFromMetadata(sessionUser: {
   user_metadata?: any;
   app_metadata?: any;
 }): "customer" | "provider" {
-  const roleFromMeta =
-    sessionUser?.user_metadata?.app_role ?? sessionUser?.app_metadata?.app_role;
-  return roleFromMeta === "provider" ? "provider" : "customer";
+  return metadataRoleFromUser(sessionUser) ?? "customer";
 }
 
 function resolveDashboardMode(sessionUser: {
@@ -1107,8 +1120,36 @@ function resolveDashboardMode(sessionUser: {
   user_metadata?: any;
   app_metadata?: any;
 }): "customer" | "provider" {
+  // Preference cache only — applySession re-resolves from /api/auth/roles.
   const stored = readStoredDashboardMode(sessionUser.id);
   return stored ?? resolveUserModeFromMetadata(sessionUser);
+}
+
+async function resolveDashboardModeFromServer(
+  sessionUser: {
+    id: string;
+    user_metadata?: any;
+    app_metadata?: any;
+  },
+  accessToken?: string | null,
+  preferredIntent?: "customer" | "provider" | null,
+): Promise<"customer" | "provider"> {
+  const roles = await fetchAccountRoles({
+    accessToken,
+    intent: preferredIntent ?? null,
+  });
+  if (roles) {
+    const mode = pickDashboardMode({
+      hasCustomer: roles.has_customer,
+      hasProvider: roles.has_provider,
+      preferredIntent: preferredIntent ?? null,
+      stored: readStoredDashboardMode(sessionUser.id),
+      metadataRole: metadataRoleFromUser(sessionUser),
+    });
+    writeStoredDashboardMode(sessionUser.id, mode);
+    return mode;
+  }
+  return resolveDashboardMode(sessionUser);
 }
 
 type AppPage =
@@ -1124,7 +1165,8 @@ type AppPage =
   | "skills"
   | "profile"
   | "chat"
-  | "report";
+  | "report"
+  | "admin";
 
 function pageFromPathname(pathname: string): AppPage | null {
   const normalized = pathname.replace(/^\/+|\/+$/g, "");
@@ -1141,7 +1183,8 @@ function pageFromPathname(pathname: string): AppPage | null {
     normalized === "skills" ||
     normalized === "profile" ||
     normalized === "chat" ||
-    normalized === "report"
+    normalized === "report" ||
+    normalized === "admin"
   ) {
     return normalized;
   }
@@ -1193,6 +1236,7 @@ type DashboardDynamicPriceEntry = {
   multiplier: number;
   usedCapacityPct: number | null;
   isActive: boolean;
+  marketClosed?: boolean;
 };
 
 function lookupDynamicPriceEntry(
@@ -1228,8 +1272,10 @@ function customerDemandTierFromPrices(
   serviceId: string,
   prices: Record<string, DashboardDynamicPriceEntry>,
 ): DemandZoneTier | null {
-  const usedCapacityPct = lookupDynamicPriceEntry(serviceId, prices)
-    ?.usedCapacityPct;
+  const entry = lookupDynamicPriceEntry(serviceId, prices);
+  if (!entry) return null;
+  if (entry.marketClosed) return "closed";
+  const usedCapacityPct = entry.usedCapacityPct;
   if (usedCapacityPct == null || !Number.isFinite(usedCapacityPct)) {
     return null;
   }
@@ -1240,8 +1286,10 @@ function providerDemandTierFromPrices(
   serviceId: string,
   prices: Record<string, DashboardDynamicPriceEntry>,
 ): DemandZoneTier | null {
-  const usedCapacityPct = lookupDynamicPriceEntry(serviceId, prices)
-    ?.usedCapacityPct;
+  const entry = lookupDynamicPriceEntry(serviceId, prices);
+  if (!entry) return null;
+  if (entry.marketClosed) return "closed";
+  const usedCapacityPct = entry.usedCapacityPct;
   if (usedCapacityPct == null || !Number.isFinite(usedCapacityPct)) {
     return null;
   }
@@ -1644,6 +1692,7 @@ const TRANSLATIONS: Record<Language, Record<string, string>> = {
     popular: "Populær",
     available_now_short: "Tilgjengelig nå",
     addons_label: "Tillegg:",
+    addon_home_visit_may_vary: "Kan variere ved hjemmebesøk",
     percent_done: "ferdig",
     confirmed: "ferdig",
     service_completed_exclaim: "Tjeneste fullført!",
@@ -1865,6 +1914,7 @@ const TRANSLATIONS: Record<Language, Record<string, string>> = {
     popular: "Popular",
     available_now_short: "Available now",
     addons_label: "Add-ons:",
+    addon_home_visit_may_vary: "May vary for home visits",
     percent_done: "done",
     confirmed: "done",
     service_completed_exclaim: "Service completed!",
@@ -4259,6 +4309,8 @@ type ProviderMeta = {
   id: string;
   is_online: boolean;
   home_service: boolean;
+  /** Accepts salon / at-provider jobs (`delivery_modes` includes at_provider). */
+  at_provider: boolean;
   status: "available" | "busy" | "unavailable";
   lat: number;
   lng: number;
@@ -4266,6 +4318,23 @@ type ProviderMeta = {
   /** Active `provider_skills.service_id` with available_now. */
   serviceIds: string[];
 };
+
+function deliveryFlagsFromModes(modes: unknown): {
+  home_service: boolean;
+  at_provider: boolean;
+} {
+  const list = Array.isArray(modes)
+    ? modes.map((v) => String(v || "").toLowerCase().trim()).filter(Boolean)
+    : [];
+  if (list.length === 0) {
+    return { home_service: true, at_provider: true };
+  }
+  return {
+    home_service: list.includes("home"),
+    at_provider:
+      list.includes("at_provider") || list.includes("provider"),
+  };
+}
 
 type BookingStyle = {
   id: string;
@@ -5197,40 +5266,37 @@ function useGeolocation() {
     }
   }, []);
 
-  const getGeoloc = useCallback(() => {
-    if ("geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (p) => {
-          setPos({ lat: p.coords.latitude, lng: p.coords.longitude });
-          setError(null);
-        },
-        (e) => setError(e.message || "Kunne ikke hente posisjon."),
-        { enableHighAccuracy: true },
-      );
-    } else {
-      setError("Stedstjenester ikke tilgjengelig i nettleseren.");
-    }
-  }, []);
-
-  const getAsync = useCallback((): Promise<LatLng | null> => {
+  const getGeoloc = useCallback((): Promise<LatLng | null> => {
     return new Promise((resolve) => {
       if (!("geolocation" in navigator)) {
         setError("Stedstjenester ikke tilgjengelig i nettleseren.");
         resolve(null);
         return;
       }
+      let settled = false;
+      const finish = (value: LatLng | null) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      const timer = window.setTimeout(() => {
+        setError("Kunne ikke hente posisjon (timeout).");
+        finish(null);
+      }, 12000);
       navigator.geolocation.getCurrentPosition(
         (p) => {
+          window.clearTimeout(timer);
           const next = { lat: p.coords.latitude, lng: p.coords.longitude };
           setPos(next);
           setError(null);
-          resolve(next);
+          finish(next);
         },
         (e) => {
+          window.clearTimeout(timer);
           setError(e.message || "Kunne ikke hente posisjon.");
-          resolve(null);
+          finish(null);
         },
-        { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 },
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 },
       );
     });
   }, []);
@@ -5242,7 +5308,7 @@ function useGeolocation() {
     };
   }, []);
 
-  return { pos, error, get: getGeoloc, getAsync, startWatch, stopWatch };
+  return { pos, error, get: getGeoloc, startWatch, stopWatch };
 }
 
 // Add custom CSS animations with glass morphism
@@ -5493,10 +5559,18 @@ export default function Page() {
   // App startup states
   const [showSplash, setShowSplash] = useState(true);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [isAdminUser, setIsAdminUser] = useState(false);
   const [authReady, setAuthReady] = useState(!hasSupabase);
   const [forceProviderSetup, setForceProviderSetup] = useState(false);
+  const [providerSignupGate, setProviderSignupGate] = useState(false);
 
-  // If an existing session is found, skip splash and land directly in-app.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setProviderSignupGate(isProviderSignupInProgress());
+  }, []);
+
+  // If an existing session is found, skip splash and land directly in-app
+  // (or back into provider signup when the gate is active).
   useEffect(() => {
     if (authReady && isLoggedIn && showSplash) {
       setShowSplash(false);
@@ -5564,21 +5638,17 @@ export default function Page() {
   }, [authReady, isLoggedIn]);
 
   const [userMode, setUserMode] = useState<"customer" | "provider">("customer");
-  const [modeSwitching, setModeSwitching] = useState(false);
-  const modeSwitchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const MODE_SWITCH_MIN_MS = 900;
+  const [accountRolesUi, setAccountRolesUi] = useState<{
+    has_customer: boolean;
+    has_provider: boolean;
+    can_switch_modes: boolean;
+  }>({ has_customer: false, has_provider: false, can_switch_modes: false });
   const [language, setLanguage] = useState<Language>(
     () => readStoredLanguage() ?? "no",
   );
   const [paymentMethod, setPaymentMethod] = useState<"apple_pay" | "card">(
     "card",
   );
-
-  useEffect(() => {
-    return () => {
-      if (modeSwitchTimerRef.current) clearTimeout(modeSwitchTimerRef.current);
-    };
-  }, []);
 
   useEffect(() => {
     writeStoredLanguage(language);
@@ -5929,6 +5999,8 @@ export default function Page() {
   const [isProviderOnline, setIsProviderOnline] = useState(false);
   const providerOnlineRefreshInFlightRef = useRef<Set<string>>(new Set());
   const providerOnlineRefreshLastCompletedRef = useRef<string | null>(null);
+  /** Bumps whenever local online intent changes so stale DB hydrates don't overwrite. */
+  const providerOnlineHydrateGenRef = useRef(0);
   const providerOfferStatusToastRef = useRef<Set<string>>(new Set());
   const providerPaintOfferRef = useRef<(row: any) => boolean>(() => false);
   const providerSyncPendingOffersRef = useRef<
@@ -5954,6 +6026,7 @@ export default function Page() {
         return;
       }
       providerOnlineRefreshInFlightRef.current.add(refreshKey);
+      const hydrateGen = providerOnlineHydrateGenRef.current;
       void supabase
         .from("provider_details")
         .select("id, is_online")
@@ -5964,15 +6037,16 @@ export default function Page() {
             data: { id?: string; is_online?: boolean } | null;
             error: { message?: string } | null;
           }) => {
+            // Ignore if user toggled (or mode switch wrote) while this fetch was in flight.
+            if (hydrateGen !== providerOnlineHydrateGenRef.current) return;
             if (res.data) {
               setIsProviderOnline(!!res.data.is_online);
               providerOnlineRefreshLastCompletedRef.current = refreshKey;
               return;
             }
-            // Self-heal: ensure own provider_details row exists so online state can persist across refreshes.
-            const { error: insErr } = await supabase
-              .from("provider_details")
-              .upsert({ id: uid }, { onConflict: "id" });
+            // Do not create provider_details here — that role is granted via
+            // onboarding / Connect, not by opening provider mode.
+            setIsProviderOnline(false);
             providerOnlineRefreshLastCompletedRef.current = refreshKey;
           },
         )
@@ -5986,6 +6060,10 @@ export default function Page() {
   const [providerEarningsToday, setProviderEarningsToday] = useState(0);
   const [onlineServices, setOnlineServices] = useState<string[]>([]);
   const [registeredServices, setRegisteredServices] = useState<string[]>([]);
+  /** Per-skill delivery mode on the working screen (Munib 6 Aug). */
+  const [providerSkillModes, setProviderSkillModes] = useState<
+    Record<string, "home" | "provider" | "both">
+  >({});
   const [providerAllowedServiceModes, setProviderAllowedServiceModes] =
     useState<{
       home: boolean;
@@ -6147,12 +6225,18 @@ export default function Page() {
 
   // Bottom sheet state - start compressed on map so sidebar is visible
   const [isBottomSheetCompressed, setIsBottomSheetCompressed] = useState(true);
+  /** Measured bottom edge of the expanded catalog filter bar (+ gap). */
+  const mainContainerRef = useRef<HTMLElement>(null);
+  const catalogTopChromeRef = useRef<HTMLDivElement>(null);
+  const [sheetTopInsetPx, setSheetTopInsetPx] = useState(152);
   const [showChat, setShowChat] = useState(false);
   const routeFetchGenRef = useRef(0);
   const routeFetchKeyInFlightRef = useRef<string | null>(null);
   const lastRouteFromRef = useRef<LatLng | null>(null);
   const lastRouteToRef = useRef<LatLng | null>(null);
   const routeReadyKeyRef = useRef<string | null>(null);
+  /** Latest GPS for provider browse presence (updated after useGeolocation). */
+  const providerBrowseGeolocRef = useRef<LatLng | null>(null);
   /** Expand customer matched sheet once; polling must not re-compress it. */
   const customerMatchedSheetOpenedRef = useRef(false);
   const customerOrderStatusContextRef = useRef<{
@@ -6214,11 +6298,33 @@ export default function Page() {
       setUser(nextUser);
       setIsLoggedIn(!!nextUser);
       if (nextUser) {
-        const mode = resolveDashboardMode(nextUser);
-        setUserMode(mode);
-        refreshProviderOnlineFromDb(nextUser.id, mode);
+        const token = session?.access_token as string | undefined;
+        // Optimistic from cache, then correct from server roles.
+        const optimistic = resolveDashboardMode(nextUser);
+        setUserMode(optimistic);
+        refreshProviderOnlineFromDb(nextUser.id, optimistic);
+        void resolveDashboardModeFromServer(nextUser, token).then((mode) => {
+          setUserMode(mode);
+          refreshProviderOnlineFromDb(nextUser.id, mode);
+          if (mode === "provider") {
+            void supabase.auth.updateUser({ data: { app_role: "provider" } });
+          }
+        });
+        void fetchAccountRoles({ accessToken: token }).then((roles) => {
+          if (!roles) return;
+          setAccountRolesUi({
+            has_customer: roles.has_customer,
+            has_provider: roles.has_provider,
+            can_switch_modes: Boolean(roles.can_switch_modes),
+          });
+        });
       } else {
         setIsProviderOnline(false);
+        setAccountRolesUi({
+          has_customer: false,
+          has_provider: false,
+          can_switch_modes: false,
+        });
       }
     };
     const authReadyTimeout = window.setTimeout(() => {
@@ -6253,6 +6359,34 @@ export default function Page() {
       unsub?.unsubscribe?.();
     };
   }, [hasSupabase, supabase, refreshProviderOnlineFromDb]);
+
+  useEffect(() => {
+    if (!loggedInUser?.id) {
+      setIsAdminUser(false);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        const token = data?.session?.access_token;
+        if (!token) {
+          if (!cancelled) setIsAdminUser(false);
+          return;
+        }
+        const res = await fetch("/api/admin/me", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!cancelled) setIsAdminUser(Boolean(body?.is_admin));
+      } catch {
+        if (!cancelled) setIsAdminUser(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loggedInUser?.id, supabase]);
 
   useEffect(() => {
     if (!loggedInUser?.id) return;
@@ -6342,7 +6476,9 @@ export default function Page() {
       window.removeEventListener("storage", onProfileUpdated);
       window.removeEventListener("profileUpdated", onProfileUpdated);
     };
-  }, [loggedInUser?.id, userMode, currentPage]);
+    // Navigating pages must not refetch the profile — `profileUpdated` and
+    // `storage` keep the header in sync after an edit.
+  }, [loggedInUser?.id, userMode]);
 
   const hamburgerUserName = useMemo(() => {
     const fromCache = menuUserName.trim();
@@ -6410,11 +6546,12 @@ export default function Page() {
         deliveryModes.length === 0 ||
         deliveryModes.includes("provider") ||
         deliveryModes.includes("at_provider");
+      // Legacy capability flags only — live delivery is per skill now.
       const modeFromDb: "home" | "provider" | null =
-        allowProvider && !allowHome
-          ? "provider"
-          : allowHome && !allowProvider
-            ? "home"
+        allowHome && !allowProvider
+          ? "home"
+          : allowProvider && !allowHome
+            ? "provider"
             : null;
 
       const allSkillIds = Array.isArray(json?.skills)
@@ -6440,6 +6577,26 @@ export default function Page() {
             ),
           ]
         : [];
+      const skillModeMap: Record<string, "home" | "provider" | "both"> = {};
+      if (Array.isArray(json?.skills)) {
+        for (const s of json.skills) {
+          if (s?.is_active === false) continue;
+          const sid = normalizeServiceId(String(s?.service_id || ""));
+          if (!sid) continue;
+          const raw = String(s?.service_mode_id || "both")
+            .trim()
+            .toLowerCase();
+          const mode: "home" | "provider" | "both" =
+            raw === "home" || raw === "provider" || raw === "both"
+              ? raw
+              : "both";
+          skillModeMap[sid] = mode;
+          for (const v of serviceIdVariantsForDashboard(sid)) {
+            skillModeMap[normalizeServiceId(v)] = mode;
+          }
+        }
+      }
+      if (!isStale()) setProviderSkillModes(skillModeMap);
       const normalizedAllSkillIds = [
         ...new Set(
           allSkillIds.map((id) => normalizeServiceId(id)).filter(Boolean),
@@ -6621,33 +6778,6 @@ export default function Page() {
           providerDeliveryModePendingRef.current = null;
         }
       }
-      const skillsOutOfSyncWithDeliveryModes =
-        providerDeliveryModePendingRef.current === null &&
-        (modeFromDb === "home"
-          ? (json?.skills || []).some(
-              (s: { service_mode_id?: string; is_active?: boolean }) =>
-                s?.is_active !== false && s?.service_mode_id === "provider",
-            )
-          : modeFromDb === "provider"
-            ? (json?.skills || []).some(
-                (s: { service_mode_id?: string; is_active?: boolean }) =>
-                  s?.is_active !== false && s?.service_mode_id === "home",
-              )
-            : false);
-      if (skillsOutOfSyncWithDeliveryModes && loggedInUser?.id) {
-        const deliveryModes =
-          modeFromDb === "provider" ? ["at_provider"] : ["home"];
-        void fetch("/api/providers/me", {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            "x-provider-id": loggedInUser.id,
-          },
-          body: JSON.stringify({ deliveryModes }),
-        }).catch((error) => {
-          console.warn("[FreshUp] delivery mode skills heal failed:", error);
-        });
-      }
       setRegisteredServices(effectiveRegisteredSkillIds);
       setOnlineServices(effectiveOnlineSkillIds);
       // Clear forced-setup flag as soon as we have active skills — avoids a
@@ -6820,16 +6950,7 @@ export default function Page() {
   const handleLogout = useCallback(async () => {
     if (loggedInUser?.id) clearStoredDashboardMode(loggedInUser.id);
     setIsProviderOnline(false);
-    if (hasSupabase && loggedInUser?.id) {
-      // Leave the dispatch pool so this account stops receiving new_offer pushes.
-      void supabase.from("provider_details").upsert(
-        {
-          id: loggedInUser.id,
-          is_online: false,
-          last_online_at: new Date().toISOString(),
-        },
-        { onConflict: "id" },
-      );
+    if (hasSupabase) {
       await supabase.auth.signOut({ scope: "global" });
     }
     setUser(null);
@@ -6842,6 +6963,7 @@ export default function Page() {
     setProviderStatsLoading(false);
     if (typeof window !== "undefined") {
       clearOAuthPending();
+      clearProviderSignupInProgress();
       localStorage.removeItem(PROVIDER_SETUP_REDIRECT_KEY);
       localStorage.removeItem(SKILLS_SAVED_MAIN_REDIRECT_KEY);
       if (window.location.pathname !== "/") {
@@ -6868,11 +6990,6 @@ export default function Page() {
   const setMode = useCallback(
     (nextMode: "home" | "provider") => {
       const modeChanged = serviceMode !== nextMode;
-      const previousMode = serviceMode;
-
-      if (userMode === "provider" && loggedInUser?.id) {
-        providerDeliveryModePendingRef.current = nextMode;
-      }
 
       if (modeChanged) {
         setServiceMode(nextMode as ServiceMode);
@@ -6884,48 +7001,9 @@ export default function Page() {
           syncDeliveryModeInSnapshots(loggedInUser.id, nextMode);
         }
       }
-
-      if (userMode !== "provider" || !loggedInUser?.id) {
-        return;
-      }
-
-      const deliveryModes =
-        nextMode === "provider" ? ["at_provider"] : ["home"];
-      void (async () => {
-        try {
-          const res = await fetch("/api/providers/me", {
-            method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-              "x-provider-id": loggedInUser.id,
-            },
-            body: JSON.stringify({ deliveryModes }),
-          });
-          if (!res.ok) {
-            const body = await res.json().catch(() => ({}));
-            throw new Error(
-              typeof body?.error === "string"
-                ? body.error
-                : "Failed to save delivery mode",
-            );
-          }
-        } catch (error) {
-          providerDeliveryModePendingRef.current = null;
-          if (modeChanged) {
-            setServiceMode(previousMode as ServiceMode);
-            if (typeof window !== "undefined" && loggedInUser?.id) {
-              localStorage.setItem(
-                sharedDeliveryModeKey(loggedInUser.id),
-                previousMode,
-              );
-              syncDeliveryModeInSnapshots(loggedInUser.id, previousMode);
-            }
-          }
-          console.warn("[FreshUp] delivery mode sync failed:", error);
-        }
-      })();
+      // Provider delivery is per skill (working card). Header toggle is customer-only.
     },
-    [loggedInUser?.id, serviceMode, userMode],
+    [loggedInUser?.id, serviceMode],
   );
 
   // Legacy alias for backward compatibility
@@ -7038,21 +7116,94 @@ export default function Page() {
   const toggleProviderOnlinePersisted = useCallback(async () => {
     if (!hasSupabase || !loggedInUser?.id) return;
     const next = !isProviderOnline;
+    providerOnlineHydrateGenRef.current += 1;
     setIsProviderOnline(next);
-    const { error } = await supabase.from("provider_details").upsert(
-      {
-        id: loggedInUser.id,
-        is_online: next,
-        last_online_at: new Date().toISOString(),
-      },
-      { onConflict: "id" },
-    );
-    if (error) {
+    const pos = providerBrowseGeolocRef.current;
+    try {
+      const res = await fetch("/api/providers/online", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-provider-id": loggedInUser.id,
+        },
+        body: JSON.stringify({
+          is_online: next,
+          ...(pos &&
+          typeof pos.lat === "number" &&
+          typeof pos.lng === "number"
+            ? { lat: pos.lat, lng: pos.lng }
+            : {}),
+        }),
+      });
+      if (!res.ok) {
+        providerOnlineHydrateGenRef.current += 1;
+        setIsProviderOnline(!next);
+        return;
+      }
+      const json = (await res.json().catch(() => ({}))) as {
+        is_online?: boolean;
+      };
+      if (typeof json.is_online === "boolean" && json.is_online !== next) {
+        providerOnlineHydrateGenRef.current += 1;
+        setIsProviderOnline(json.is_online);
+        return;
+      }
+      if (next) {
+        providerSyncPendingOffersRef.current?.(true);
+      }
+    } catch {
+      providerOnlineHydrateGenRef.current += 1;
       setIsProviderOnline(!next);
-    } else if (next) {
-      providerSyncPendingOffersRef.current?.(true);
     }
-  }, [hasSupabase, loggedInUser?.id, isProviderOnline, supabase]);
+  }, [hasSupabase, loggedInUser?.id, isProviderOnline]);
+
+  // Keep last_online_at fresh while online so abandoned tabs don't stay in the pool.
+  useEffect(() => {
+    if (
+      !hasSupabase ||
+      !loggedInUser?.id ||
+      userMode !== "provider" ||
+      !isProviderOnline
+    ) {
+      return;
+    }
+    const uid = loggedInUser.id;
+    const beat = () => {
+      const pos = providerBrowseGeolocRef.current;
+      void fetch("/api/providers/online", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-provider-id": uid,
+        },
+        body: JSON.stringify({
+          heartbeat: true,
+          ...(pos &&
+          typeof pos.lat === "number" &&
+          typeof pos.lng === "number"
+            ? { lat: pos.lat, lng: pos.lng }
+            : {}),
+        }),
+      }).catch(() => {
+        // best-effort — cron stale sweep clears if heartbeats stop
+      });
+    };
+    beat();
+    const timer = window.setInterval(beat, 45_000);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") beat();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [
+    hasSupabase,
+    loggedInUser?.id,
+    userMode,
+    isProviderOnline,
+  ]);
 
   const toggleProviderSkillActivePersisted = useCallback(
     async (serviceId: string, nextActive: boolean) => {
@@ -7104,6 +7255,7 @@ export default function Page() {
       });
 
       try {
+        const pos = providerBrowseGeolocRef.current;
         const res = await fetch("/api/providers/skills/status", {
           method: "POST",
           headers: {
@@ -7113,11 +7265,25 @@ export default function Page() {
           body: JSON.stringify({
             service_id: serviceId,
             is_active: nextActive,
+            ...(pos &&
+            typeof pos.lat === "number" &&
+            typeof pos.lng === "number"
+              ? { lat: pos.lat, lng: pos.lng }
+              : {}),
           }),
         });
         if (!res.ok) {
           const json = await res.json().catch(() => ({}));
-          throw new Error(json?.error || "Failed to update skill status");
+          const code = String(json?.error || "");
+          if (code === "PAYOUT_SETUP_REQUIRED" || code === "ADMIN_PENDING") {
+            throw new Error(code);
+          }
+          throw new Error(
+            json?.message || json?.error || "Failed to update skill status",
+          );
+        }
+        if (nextActive) {
+          setIsProviderOnline(true);
         }
         // Sync from API so other-mode deactivations are reflected.
         void refreshRegisteredProviderSkills();
@@ -7128,8 +7294,20 @@ export default function Page() {
           );
           return !nextActive ? [...prevFiltered, normalized] : prevFiltered;
         });
+        const code = String(error?.message || "");
+        const gateMsg =
+          code === "PAYOUT_SETUP_REQUIRED"
+            ? language === "en"
+              ? "Complete payout setup before going online."
+              : "Fullfør utbetalingsoppsett før du går online."
+            : code === "ADMIN_PENDING"
+              ? language === "en"
+                ? "Waiting for FreshUp admin approval before you can go online."
+                : "Venter på FreshUp-godkjenning før du kan gå online."
+              : null;
         toast.error(
-          error?.message ||
+          gateMsg ||
+            error?.message ||
             (language === "en"
               ? "Could not update skill status"
               : "Kunne ikke oppdatere ferdighetsstatus"),
@@ -7143,6 +7321,47 @@ export default function Page() {
       FALLBACK_MODE_SERVICES,
       refreshRegisteredProviderSkills,
     ],
+  );
+
+  const setProviderSkillModePersisted = useCallback(
+    async (
+      serviceId: string,
+      nextMode: "home" | "provider" | "both",
+    ) => {
+      if (!loggedInUser?.id) return;
+      const variants = serviceIdVariantsForDashboard(serviceId);
+      const previous = { ...providerSkillModes };
+      setProviderSkillModes((prev) => {
+        const next = { ...prev };
+        for (const v of variants) {
+          next[normalizeServiceId(v)] = nextMode;
+        }
+        return next;
+      });
+      try {
+        const res = await fetch("/api/providers/skills/status", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-provider-id": loggedInUser.id,
+          },
+          body: JSON.stringify({
+            service_id: serviceId,
+            service_mode_id: nextMode,
+          }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      } catch (error) {
+        setProviderSkillModes(previous);
+        console.warn("[FreshUp] skill mode save failed:", error);
+        toast.error(
+          language === "en"
+            ? "Could not update delivery mode"
+            : "Kunne ikke oppdatere leveringsmodus",
+        );
+      }
+    },
+    [loggedInUser?.id, language, providerSkillModes],
   );
 
   const activeTarget = useMemo(
@@ -7472,6 +7691,19 @@ export default function Page() {
       }).length,
     [visibleServices, onlineServices],
   );
+
+  /** Customer subtitle: services in this category that are bookable (not market-closed). */
+  const visibleBookableServiceCount = useMemo(() => {
+    if (userMode !== "customer") return visibleServices.length;
+    return visibleServices.filter((style) => {
+      const entry = lookupDynamicPriceEntry(
+        bookingPricingServiceId(style),
+        dynamicPrices,
+      );
+      // Until quote-bulk returns an entry, keep the service counted (matches card seed).
+      return entry?.marketClosed !== true;
+    }).length;
+  }, [userMode, visibleServices, dynamicPrices]);
 
   /** Categories with at least one online provider skill (sidebar green dots). */
   const providerOnlineCategoryIds = useMemo(() => {
@@ -8802,13 +9034,58 @@ export default function Page() {
     pos: geoloc,
     error: geoError,
     get: getGeoloc,
-    getAsync: getGeolocAsync,
     startWatch,
     stopWatch,
   } = useGeolocation();
-  const [preferLiveGps, setPreferLiveGps] = useState(false);
-  const [locatingGps, setLocatingGps] = useState(false);
-  const [mapRecenterNonce, setMapRecenterNonce] = useState(0);
+
+  useEffect(() => {
+    if (
+      typeof geoloc?.lat === "number" &&
+      typeof geoloc?.lng === "number" &&
+      Number.isFinite(geoloc.lat) &&
+      Number.isFinite(geoloc.lng)
+    ) {
+      providerBrowseGeolocRef.current = geoloc;
+    }
+  }, [geoloc?.lat, geoloc?.lng]);
+
+  useEffect(() => {
+    if (userMode !== "provider") return;
+    startWatch();
+  }, [userMode, startWatch]);
+
+  useEffect(() => {
+    if (
+      userMode !== "provider" ||
+      !isProviderOnline ||
+      !hasSupabase ||
+      !loggedInUser?.id
+    ) {
+      return;
+    }
+    const pos = providerBrowseGeolocRef.current;
+    if (
+      !pos ||
+      typeof pos.lat !== "number" ||
+      typeof pos.lng !== "number"
+    ) {
+      return;
+    }
+    void supabase
+      .from("provider_details")
+      .update({ lat: pos.lat, lng: pos.lng })
+      .eq("id", loggedInUser.id)
+      .eq("is_online", true);
+  }, [
+    userMode,
+    isProviderOnline,
+    hasSupabase,
+    loggedInUser?.id,
+    geoloc?.lat,
+    geoloc?.lng,
+    supabase,
+  ]);
+
   const demandZoneServiceId = useMemo(() => {
     if (selectedStyle?.id) {
       return bookingPricingServiceId(selectedStyle);
@@ -8967,6 +9244,11 @@ export default function Page() {
     useState<LatLng | null>(null);
   /** Avoid bulk-pricing on live GPS then jumping when saved profile location loads. */
   const [customerPricingLocReady, setCustomerPricingLocReady] = useState(false);
+  /** After GPS button: use live device coords instead of saved profile pin. */
+  const [preferLiveGps, setPreferLiveGps] = useState(false);
+  const [locatingGps, setLocatingGps] = useState(false);
+  /** Bumps MapView viewportResetKey so pan-lock clears and map flies to GPS. */
+  const [gpsRecenterNonce, setGpsRecenterNonce] = useState(0);
 
   useEffect(() => {
     if (userMode !== "customer" || !loggedInUser?.id) {
@@ -9059,26 +9341,18 @@ export default function Page() {
       return geoloc;
     }
     return null;
-  }, [
-    preferLiveGps,
-    userMode,
-    customerSavedLocation,
-    geoloc?.lat,
-    geoloc?.lng,
-  ]);
+  }, [preferLiveGps, userMode, customerSavedLocation, geoloc?.lat, geoloc?.lng]);
 
   /** Location used for catalog pricing — waits for profile settle to avoid flash. */
   const pricingCustomerLoc = useMemo((): LatLng | null => {
     if (userMode === "customer") {
-      if (!customerPricingLocReady) return null;
-      if (
-        preferLiveGps &&
-        typeof geoloc?.lat === "number" &&
-        typeof geoloc?.lng === "number"
-      ) {
-        return geoloc;
-      }
-      if (customerSavedLocation) return customerSavedLocation;
+      if (!customerPricingLocReady && !preferLiveGps) return null;
+      const live =
+        typeof geoloc?.lat === "number" && typeof geoloc?.lng === "number"
+          ? geoloc
+          : null;
+      if (preferLiveGps && live) return live;
+      return pickMarketDetectionCoords(customerSavedLocation, live);
     }
     if (typeof geoloc?.lat === "number" && typeof geoloc?.lng === "number") {
       return geoloc;
@@ -9095,11 +9369,7 @@ export default function Page() {
 
   const [followMe, setFollowMe] = useState(true);
   useEffect(() => {
-    if (
-      userMode === "customer" &&
-      customerSavedLocation &&
-      !preferLiveGps
-    ) {
+    if (userMode === "customer" && customerSavedLocation && !preferLiveGps) {
       stopWatch();
       return;
     }
@@ -9116,22 +9386,25 @@ export default function Page() {
 
   const goToMyLocation = useCallback(async () => {
     setLocatingGps(true);
+    setFollowMe(true);
     try {
-      const pos = await getGeolocAsync();
+      const pos = await getGeoloc();
       if (pos) {
         setPreferLiveGps(true);
-        setFollowMe(true);
         startWatch();
-      } else if (customerSavedLocation) {
+        // Clear manual pan-lock and force MapView to ease/fit to the new center.
+        setGpsRecenterNonce((n) => n + 1);
+      } else if (userMode === "customer" && customerSavedLocation) {
         setPreferLiveGps(false);
       }
     } catch {
-      setPreferLiveGps(false);
+      if (userMode === "customer" && customerSavedLocation) {
+        setPreferLiveGps(false);
+      }
     } finally {
-      setMapRecenterNonce((n) => n + 1);
       setLocatingGps(false);
     }
-  }, [customerSavedLocation, getGeolocAsync, startWatch]);
+  }, [getGeoloc, startWatch, userMode, customerSavedLocation]);
 
   // FreshUp Pricing & Tier System v1.0 §2.3 — bulk-fetch dynamic prices
   // for all services in the customer's current area. Safe to fail: when
@@ -9168,7 +9441,7 @@ export default function Page() {
   const bulkQuoteFetchKey = useMemo(() => {
     if (!pricingAreaKey || !catalogHierarchyReady) return null;
     if (userMode === "customer" && !customerPricingLocReady) return null;
-    return `${appMode}|${pricingAreaKey}|${bulkQuoteServiceIds}|r${mapPriceRefreshKey}`;
+    return `${appMode}|${pricingAreaKey}|${bulkQuoteServiceIds}|${serviceMode}|r${mapPriceRefreshKey}`;
   }, [
     appMode,
     pricingAreaKey,
@@ -9177,6 +9450,7 @@ export default function Page() {
     mapPriceRefreshKey,
     userMode,
     customerPricingLocReady,
+    serviceMode,
   ]);
   const bulkQuoteCoords = useMemo((): { lat: number; lng: number } | null => {
     const pos =
@@ -9213,6 +9487,8 @@ export default function Page() {
   bulkQuoteServiceIdsRef.current = bulkQuoteServiceIds;
   const appModeRef = useRef(appMode);
   appModeRef.current = appMode;
+  const serviceModeRef = useRef(serviceMode);
+  serviceModeRef.current = serviceMode;
 
   useEffect(() => {
     if (!bulkQuoteFetchKey) {
@@ -9235,6 +9511,11 @@ export default function Page() {
         const params = new URLSearchParams();
         // Service cards show the customer service price only (spec §2.2).
         params.set("delivery_mode", "provider");
+        // Market closed respects the customer's selected Delivery / Hos tilbyder.
+        params.set(
+          "online_mode",
+          serviceModeRef.current === "provider" ? "provider" : "home",
+        );
         params.set("mode", appModeRef.current);
         const coords = bulkQuoteCoordsRef.current;
         const areaKey = pricingAreaKeyRef.current;
@@ -9269,22 +9550,31 @@ export default function Page() {
           multiplier?: number | null;
           used_capacity_pct?: number | null;
           is_active?: boolean;
+          market_closed?: boolean;
         }>) {
           if (!item?.service_id) continue;
           let servicePrice = Number(item.customer_service_price);
           const usedCapacityPct = Number(item.used_capacity_pct);
           const hasUsedCapacity =
             Number.isFinite(usedCapacityPct) && usedCapacityPct >= 0;
+          const marketClosed = item.market_closed === true;
           if (!Number.isFinite(servicePrice) || servicePrice <= 0) {
             const legacyBase = Number(item.legacy_base_price);
             if (Number.isFinite(legacyBase) && legacyBase > 0) {
               servicePrice = legacyProviderBaseToCustomerServicePrice(
                 legacyBase,
                 {
-                  usedCapacityPct: hasUsedCapacity ? usedCapacityPct : 50,
-                  multiplier: Number.isFinite(Number(item.multiplier))
-                    ? Number(item.multiplier)
-                    : 0,
+                  // Closed market: base only (no dynamic multiplier).
+                  usedCapacityPct: marketClosed
+                    ? 50
+                    : hasUsedCapacity
+                      ? usedCapacityPct
+                      : 50,
+                  multiplier: marketClosed
+                    ? 0
+                    : Number.isFinite(Number(item.multiplier))
+                      ? Number(item.multiplier)
+                      : 0,
                 },
               );
             }
@@ -9292,9 +9582,12 @@ export default function Page() {
           if (!Number.isFinite(servicePrice) || servicePrice <= 0) continue;
           const entry: DashboardDynamicPriceEntry = {
             customer: roundMoney(servicePrice),
-            multiplier: Number(item.multiplier ?? 0) || 0,
+            multiplier: marketClosed
+              ? 0
+              : Number(item.multiplier ?? 0) || 0,
             usedCapacityPct: hasUsedCapacity ? usedCapacityPct : null,
             isActive: !!item.is_active,
+            marketClosed,
           };
           for (const variant of serviceIdVariantsForDashboard(item.service_id)) {
             map[normalizeServiceId(variant)] = entry;
@@ -9340,6 +9633,7 @@ export default function Page() {
           id: "demo1",
           is_online: true,
           home_service: true,
+          at_provider: true,
           status: "available",
           lat: OSLO_DEFAULT.lat + 0.01,
           lng: OSLO_DEFAULT.lng - 0.015,
@@ -9350,6 +9644,7 @@ export default function Page() {
           id: "demo2",
           is_online: true,
           home_service: false,
+          at_provider: true,
           status: "available",
           lat: 59.9132,
           lng: 10.741,
@@ -9360,6 +9655,7 @@ export default function Page() {
           id: "demo3",
           is_online: true,
           home_service: true,
+          at_provider: true,
           status: "available",
           lat: OSLO_DEFAULT.lat - 0.005,
           lng: OSLO_DEFAULT.lng + 0.01,
@@ -9370,6 +9666,7 @@ export default function Page() {
           id: "demo4",
           is_online: true,
           home_service: false,
+          at_provider: true,
           status: "available",
           lat: OSLO_DEFAULT.lat + 0.015,
           lng: OSLO_DEFAULT.lng + 0.005,
@@ -9380,6 +9677,7 @@ export default function Page() {
           id: "demo5",
           is_online: true,
           home_service: true,
+          at_provider: true,
           status: "available",
           lat: OSLO_DEFAULT.lat - 0.01,
           lng: OSLO_DEFAULT.lng - 0.01,
@@ -9396,8 +9694,12 @@ export default function Page() {
       const [profsResult, skillsResult, catsResult] = await Promise.all([
         supabase
           .from("provider_details")
-          .select("id, lat, lng, is_online, delivery_modes")
-          .eq("is_online", true),
+          .select("id, lat, lng, is_online, delivery_modes, last_online_at")
+          .eq("is_online", true)
+          .gte(
+            "last_online_at",
+            new Date(Date.now() - 3 * 60 * 1000).toISOString(),
+          ),
         supabase
           .from("provider_skills")
           .select("provider_id, service_id")
@@ -9410,12 +9712,12 @@ export default function Page() {
 
       const map: Record<string, ProviderMeta> = {};
       for (const p of profsResult.data ?? []) {
+        const flags = deliveryFlagsFromModes(p.delivery_modes);
         map[p.id] = {
           id: p.id,
           is_online: !!p.is_online,
-          home_service: Array.isArray(p.delivery_modes)
-            ? p.delivery_modes.includes("home")
-            : false,
+          home_service: flags.home_service,
+          at_provider: flags.at_provider,
           status: !!p.is_online ? "available" : "unavailable",
           lat: p.lat,
           lng: p.lng,
@@ -9470,12 +9772,12 @@ export default function Page() {
           setProviders((prev) => {
             const next = { ...prev };
             const id = row.id;
+            const flags = deliveryFlagsFromModes(row.delivery_modes);
             const prevMeta = next[id] || {
               id,
               is_online: !!row.is_online,
-              home_service: Array.isArray(row.delivery_modes)
-                ? row.delivery_modes.includes("home")
-                : false,
+              home_service: flags.home_service,
+              at_provider: flags.at_provider,
               status: !!row.is_online ? "available" : "unavailable",
               lat: row.lat,
               lng: row.lng,
@@ -9485,9 +9787,8 @@ export default function Page() {
             next[id] = {
               ...prevMeta,
               is_online: !!row.is_online,
-              home_service: Array.isArray(row.delivery_modes)
-                ? row.delivery_modes.includes("home")
-                : false,
+              home_service: flags.home_service,
+              at_provider: flags.at_provider,
               status: !!row.is_online ? "available" : "unavailable",
               lat: row.lat,
               lng: row.lng,
@@ -9563,7 +9864,7 @@ export default function Page() {
       if (!p.is_online) continue;
       if (p.status === "unavailable") continue;
       if (mode === "home" && !p.home_service) continue;
-      if (mode === "provider" && p.home_service) continue;
+      if (mode === "provider" && !p.at_provider) continue;
       if (!p.categories.includes(category)) continue;
       out.push({
         id: p.id,
@@ -9649,7 +9950,7 @@ export default function Page() {
       if (!p.is_online) continue;
       if (p.status === "unavailable") continue;
       if (mode === "home" && !p.home_service) continue;
-      if (mode === "provider" && p.home_service) continue;
+      if (mode === "provider" && !p.at_provider) continue;
       if (!p.categories.includes(category)) continue;
       const skillIds = p.serviceIds ?? [];
       const skillMatch =
@@ -9668,90 +9969,14 @@ export default function Page() {
     return out;
   }, [providers, mode, category, visibleServices]);
 
-  const [simulatedFleetUnits, setSimulatedFleetUnits] = useState<
-    SimulatedFleetUnit[]
-  >([]);
-
   const liveFleetProviders = useMemo(() => {
     if (!showLiveFleet) return [];
-    const simulated =
-      mode === "home"
-        ? simulatedFleetUnits.map((unit) => ({
-            id: unit.id,
-            lat: unit.lat,
-            lng: unit.lng,
-            type: "mobile" as const,
-            status: "available" as const,
-            heading: unit.heading,
-          }))
-        : [];
-    return [...filteredRealFleetProviders, ...simulated];
-  }, [
-    showLiveFleet,
-    mode,
-    filteredRealFleetProviders,
-    simulatedFleetUnits,
-  ]);
-
-  useEffect(() => {
-    if (!showLiveFleet || mode !== "home") {
-      setSimulatedFleetUnits([]);
-      return;
-    }
-    const center = customerLoc ?? OSLO_DEFAULT;
-    const count = desiredSimulatedFleetCount(filteredRealFleetProviders.length);
-    setSimulatedFleetUnits(
-      seedSimulatedFleet(center, count, fleetFilterKey),
-    );
-  }, [
-    showLiveFleet,
-    mode,
-    fleetFilterKey,
-    customerLoc,
-    filteredRealFleetProviders.length,
-  ]);
-
-  useEffect(() => {
-    if (!showLiveFleet || mode !== "home" || simulatedFleetUnits.length === 0) {
-      return;
-    }
-    const center = customerLoc ?? OSLO_DEFAULT;
-    const timer = window.setInterval(() => {
-      setSimulatedFleetUnits((prev) =>
-        advanceSimulatedFleet(prev, center, 2000),
-      );
-    }, 2000);
-    return () => window.clearInterval(timer);
-  }, [showLiveFleet, mode, simulatedFleetUnits.length, customerLoc]);
+    // Real online providers only — no decorative/simulated markers.
+    return filteredRealFleetProviders;
+  }, [showLiveFleet, filteredRealFleetProviders]);
 
   // Order context
   const [orderId, setOrderId] = useState<string | null>(null);
-  const activeOrderChatId =
-    userMode === "provider"
-      ? mockIncomingRequest?.orderId || null
-      : orderId;
-  const orderChatUnreadEnabled =
-    userMode === "provider"
-      ? Boolean(
-          mockIncomingRequest &&
-            (providerJobStep === "accepted" ||
-              providerJobStep === "enroute" ||
-              providerJobStep === "arrived" ||
-              providerJobStep === "in_service"),
-        )
-      : step === "matched" || step === "in_service";
-  const { unreadCount: orderChatUnread } = useOrderChatUnread({
-    orderId: activeOrderChatId,
-    language,
-    enabled: Boolean(isLoggedIn && orderChatUnreadEnabled),
-    chatOpen: showChat,
-  });
-  const orderChatUnreadBadge =
-    orderChatUnread > 99
-      ? "99+"
-      : orderChatUnread > 0
-        ? String(orderChatUnread)
-        : null;
   const customerActiveJobRestoreDoneRef = useRef(false);
   const [searchTimer, setSearchTimer] = useState(0);
   const [isMatching, setIsMatching] = useState(false);
@@ -9773,6 +9998,7 @@ export default function Page() {
     code: string;
     distanceKm?: number | null;
     avatarUrl?: string | null;
+    phone?: string | null;
   } | null>(null);
 
   // Home delivery km: 1 km default until a provider is matched; then actual driving km.
@@ -10753,17 +10979,27 @@ export default function Page() {
           customerTotal: roundMoney(customerTotal),
         });
         // Keep catalog card prices aligned with the live quote.
+        // Must preserve marketClosed — dropping it made Confirm go green again
+        // after expand (used_capacity 0% reads as "Many available").
         if (roundedService > 0) {
           const usedCapacityPct = Number(quote?.usedCapacityPct);
-          const entry: DashboardDynamicPriceEntry = {
-            customer: roundedService,
-            multiplier: Number(quote?.multiplier ?? 0) || 0,
-            usedCapacityPct: Number.isFinite(usedCapacityPct)
-              ? usedCapacityPct
-              : null,
-            isActive: !!quote?.basePriceIsActive,
-          };
           setDynamicPrices((prev) => {
+            const existing = lookupDynamicPriceEntry(pricingServiceId, prev);
+            const marketClosed =
+              typeof quote?.marketClosed === "boolean"
+                ? quote.marketClosed === true
+                : !!existing?.marketClosed;
+            const entry: DashboardDynamicPriceEntry = {
+              customer: roundedService,
+              multiplier: marketClosed
+                ? 0
+                : Number(quote?.multiplier ?? 0) || 0,
+              usedCapacityPct: Number.isFinite(usedCapacityPct)
+                ? usedCapacityPct
+                : null,
+              isActive: !!quote?.basePriceIsActive,
+              marketClosed,
+            };
             const next = { ...prev };
             for (const variant of serviceIdVariantsForDashboard(
               pricingServiceId,
@@ -11642,6 +11878,7 @@ export default function Page() {
     let cancelled = false;
     let statusPollInFlight = false;
     let lastStatusPollAt = 0;
+    let lastAppliedDbStatus = "";
 
     const applyStatus = (payload: {
       status?: string;
@@ -11657,6 +11894,7 @@ export default function Page() {
     }) => {
       const ctx = customerOrderStatusContextRef.current;
       const st = String(payload.status || "");
+      if (st) lastAppliedDbStatus = st;
       if (payload.started_at) {
         setServiceStartedAt(String(payload.started_at));
       }
@@ -11779,10 +12017,13 @@ export default function Page() {
     };
 
     void hydrate();
-    const pollId = setInterval(
-      () => void hydrate(),
-      CUSTOMER_ACTIVE_STATUS_POLL_MS,
-    );
+
+    // Realtime `orders` UPDATEs are the live path; polling is the fallback.
+    const poll = createAdaptivePoll({
+      run: () => void hydrate(),
+      fallbackMs: CUSTOMER_ACTIVE_STATUS_POLL_MS,
+      connectedMs: REALTIME_SAFETY_POLL_MS,
+    });
 
     const ch = supabase
       .channel(`customer-order-${orderId}`)
@@ -11796,26 +12037,34 @@ export default function Page() {
         },
         (payload: { new?: Record<string, unknown> }) => {
           const row = payload?.new;
-          if (row) {
-            applyStatus({
-              status: String(row.status || ""),
-              started_at:
-                (row.started_at as string | null | undefined) ?? null,
-              service_paused_at:
-                (row.service_paused_at as string | null | undefined) ?? null,
-              service_paused_total_seconds:
-                (row.service_paused_total_seconds as number | null | undefined) ??
-                null,
-            });
-          }
-          void hydrate({ force: true });
+          if (!row) return;
+          const dbStatus = String(row.status || "");
+          const isTransition = Boolean(dbStatus) && dbStatus !== lastAppliedDbStatus;
+          applyStatus({
+            status: dbStatus,
+            started_at: (row.started_at as string | null | undefined) ?? null,
+            service_paused_at:
+              (row.service_paused_at as string | null | undefined) ?? null,
+            service_paused_total_seconds:
+              (row.service_paused_total_seconds as number | null | undefined) ??
+              null,
+          });
+          // Provider and pricing only change on a status transition, so skip
+          // the extra status fetch for pause/resume and timer-only updates.
+          if (isTransition) void hydrate({ force: true });
         },
       )
-      .subscribe();
+      .subscribe((channelStatus: string) => {
+        if (channelStatus === "SUBSCRIBED") {
+          poll.setRealtimeConnected(true);
+        } else if (isRealtimeDownStatus(channelStatus)) {
+          poll.setRealtimeConnected(false);
+        }
+      });
 
     return () => {
       cancelled = true;
-      clearInterval(pollId);
+      poll.stop();
       ch.unsubscribe();
     };
   }, [hasSupabase, orderId, step, supabase]);
@@ -11879,6 +12128,14 @@ export default function Page() {
     };
     void hydrateOnce();
 
+    // The provider publishes GPS on the same cadence and every row lands on
+    // this channel, so polling only needs to cover a dead channel.
+    const poll = createAdaptivePoll({
+      run: () => void hydrateOnce(),
+      fallbackMs: LIVE_LOCATION_PUBLISH_MS,
+      connectedMs: REALTIME_SAFETY_POLL_MS,
+    });
+
     locChannelRef.current?.unsubscribe?.();
     const channel = supabase
       .channel(`order-location-${orderId}`)
@@ -11895,34 +12152,32 @@ export default function Page() {
           if (row) applyRow(row);
         },
       )
-      .subscribe((status: string) => {
-        if (status === "SUBSCRIBED") {
+      .subscribe((channelStatus: string) => {
+        if (channelStatus === "SUBSCRIBED") {
           setOrderRealtimeState("connected");
+          poll.setRealtimeConnected(true);
           void hydrateOnce();
-        } else if (
-          status === "CHANNEL_ERROR" ||
-          status === "TIMED_OUT" ||
-          status === "CLOSED"
-        ) {
+        } else if (isRealtimeDownStatus(channelStatus)) {
           setOrderRealtimeState("reconnecting");
+          poll.setRealtimeConnected(false);
         }
       });
 
     locChannelRef.current = channel;
 
-    const pollId = window.setInterval(() => {
-      void hydrateOnce();
-    }, LIVE_LOCATION_PUBLISH_MS);
-
-    const onFocus = () => void hydrateOnce();
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onFocus);
+    // `focus` and `visibilitychange` overlap; `runNow` also resets the timer.
+    const onResume = () => {
+      if (document.visibilityState === "hidden") return;
+      poll.runNow();
+    };
+    window.addEventListener("focus", onResume);
+    document.addEventListener("visibilitychange", onResume);
 
     return () => {
       cancelled = true;
-      window.clearInterval(pollId);
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onFocus);
+      poll.stop();
+      window.removeEventListener("focus", onResume);
+      document.removeEventListener("visibilitychange", onResume);
       channel.unsubscribe();
       if (locChannelRef.current === channel) locChannelRef.current = null;
     };
@@ -11933,17 +12188,19 @@ export default function Page() {
     step,
     status,
     userMode,
-    provider?.id,
     applyLiveProviderLocation,
   ]);
+
+  // Fallback position for the publish loop, read through a ref so a moving GPS
+  // watch does not tear down and restart the interval on every fix.
+  const customerPublishFallbackRef = useRef<LatLng | null>(null);
+  customerPublishFallbackRef.current = geoloc ?? customerSavedLocation;
 
   // Customer-side: publish live customer GPS for the active order.
   useEffect(() => {
     if (userMode !== "customer") return;
     if (!["matched", "in_service"].includes(step)) return;
-    if (!["assigned", "enroute", "arrived", "in_service"].includes(status)) {
-      return;
-    }
+    if (!customerUiStatusPublishesLiveLocation(status)) return;
     const activeOrderId = String(orderId || "");
     const activeCustomerId = String(loggedInUser?.id || "");
     if (!activeOrderId || !activeCustomerId) return;
@@ -11969,7 +12226,7 @@ export default function Page() {
             );
           },
           () => {
-            const fallback = geoloc ?? customerSavedLocation;
+            const fallback = customerPublishFallbackRef.current;
             if (fallback) {
               setCustomerLivePosIfChanged(fallback);
               void postCustomerLocation(
@@ -11982,7 +12239,7 @@ export default function Page() {
           { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 },
         );
       } else {
-        const fallback = geoloc ?? customerSavedLocation;
+        const fallback = customerPublishFallbackRef.current;
         if (fallback) {
           setCustomerLivePosIfChanged(fallback);
           void postCustomerLocation(activeOrderId, activeCustomerId, fallback);
@@ -12003,8 +12260,6 @@ export default function Page() {
     status,
     orderId,
     loggedInUser?.id,
-    geoloc,
-    customerSavedLocation,
     postCustomerLocation,
     setCustomerLivePosIfChanged,
   ]);
@@ -12533,6 +12788,15 @@ export default function Page() {
           body: JSON.stringify({
             offer_id: offerId,
             provider_id: loggedInUser.id,
+            offer_shown_at: (() => {
+              const expiresMs = new Date(
+                String(offer.expiresAt || ""),
+              ).getTime();
+              if (!Number.isFinite(expiresMs)) return null;
+              return new Date(
+                expiresMs - PROVIDER_OFFER_EXPIRES_MS,
+              ).toISOString();
+            })(),
           }),
         });
         const data = await res.json().catch(() => ({}));
@@ -12842,6 +13106,15 @@ export default function Page() {
           body: JSON.stringify({
             offer_id: offer.offerId,
             provider_id: loggedInUser.id,
+            offer_shown_at: (() => {
+              const expiresMs = new Date(
+                String(offer.expiresAt || ""),
+              ).getTime();
+              if (!Number.isFinite(expiresMs)) return null;
+              return new Date(
+                expiresMs - PROVIDER_OFFER_EXPIRES_MS,
+              ).toISOString();
+            })(),
           }),
         });
         const data = await res.json().catch(() => ({}));
@@ -13143,6 +13416,54 @@ export default function Page() {
     }
   };
 
+  // Cap expanded service sheet below the measured catalog filter bar (Haircut/Braids row).
+  const measureSheetTopInset = useCallback(() => {
+    if (step !== "map" || isBottomSheetCompressed) return;
+    const chrome = catalogTopChromeRef.current;
+    const mainEl = mainContainerRef.current;
+    if (!chrome || !mainEl) return;
+    const chromeBottom = chrome.getBoundingClientRect().bottom;
+    const mainTop = mainEl.getBoundingClientRect().top;
+    if (!Number.isFinite(chromeBottom) || !Number.isFinite(mainTop)) return;
+    const inset = Math.ceil(chromeBottom - mainTop + 20);
+    if (inset <= 0) return;
+    setSheetTopInsetPx(inset);
+  }, [
+    step,
+    isBottomSheetCompressed,
+    appMode,
+    target,
+    category,
+    resolvedCategoryId,
+    language,
+  ]);
+
+  useLayoutEffect(() => {
+    if (step !== "map" || isBottomSheetCompressed) return;
+
+    measureSheetTopInset();
+    const raf1 = requestAnimationFrame(() => {
+      measureSheetTopInset();
+      requestAnimationFrame(measureSheetTopInset);
+    });
+    const afterAnimate = window.setTimeout(measureSheetTopInset, 320);
+    window.addEventListener("resize", measureSheetTopInset);
+    const ro =
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(measureSheetTopInset)
+        : null;
+    const chrome = catalogTopChromeRef.current;
+    if (ro && chrome) ro.observe(chrome);
+    const mainEl = mainContainerRef.current;
+    if (ro && mainEl) ro.observe(mainEl);
+    return () => {
+      cancelAnimationFrame(raf1);
+      window.clearTimeout(afterAnimate);
+      window.removeEventListener("resize", measureSheetTopInset);
+      ro?.disconnect();
+    };
+  }, [step, isBottomSheetCompressed, measureSheetTopInset]);
+
   // Progress bar component - only for confirm step now
   const ProgressBar = ({ currentStep }: { currentStep: Step }) => {
     // Only show on confirm step
@@ -13180,29 +13501,43 @@ export default function Page() {
     );
   }
 
-  // Show login page if not logged in
-  if (!isLoggedIn) {
+  // Show login page if not logged in, or mid phone-first provider signup
+  // (OTP/OAuth already created a session before profile→payment→services).
+  if (!isLoggedIn || providerSignupGate) {
     return (
       <LoginPage
+        onProviderSignupGateChange={setProviderSignupGate}
         onLogin={(userType) => {
-          void supabase.auth.getSession().then(({ data }: any) => {
+          clearProviderSignupInProgress();
+          setProviderSignupGate(false);
+          void supabase.auth.getSession().then(async ({ data }: any) => {
             const session = data?.session;
             const uid = session?.user?.id;
-            if (uid) {
-              writeStoredDashboardMode(uid, userType);
+            const token = session?.access_token as string | undefined;
+            let mode: "customer" | "provider" = userType;
+            if (uid && session?.user) {
+              mode = await resolveDashboardModeFromServer(
+                session.user,
+                token,
+                userType,
+              );
+              writeStoredDashboardMode(uid, mode);
               setUser(session.user);
-              if (userType === "provider") {
+              if (mode === "provider") {
                 const hydrated = mergeSkillsFromLocalSnapshot(uid, [], []);
                 if (hydrated.registered.length > 0) {
                   setRegisteredServices(hydrated.registered);
                 }
+                void supabase.auth.updateUser({
+                  data: { app_role: "provider" },
+                });
               }
             }
             setIsLoggedIn(true);
-            setUserMode(userType);
+            setUserMode(mode);
             if (typeof window !== "undefined") {
               localStorage.removeItem(PROVIDER_SETUP_REDIRECT_KEY);
-              if (userType === "provider") {
+              if (mode === "provider") {
                 window.dispatchEvent(new CustomEvent("providerSkillsUpdated"));
               }
             }
@@ -13237,50 +13572,60 @@ export default function Page() {
       | "wallet"
       | "skills"
       | "profile"
-      | "stats",
+      | "stats"
+      | "admin",
   ) => {
     setCurrentPage(page);
   };
 
   const handleModeChange = (mode: "customer" | "provider") => {
-    if (mode === userMode || modeSwitching) return;
+    if (!accountRolesUi.can_switch_modes) return;
     if (loggedInUser?.id) writeStoredDashboardMode(loggedInUser.id, mode);
-
-    setModeSwitching(true);
-    if (modeSwitchTimerRef.current) clearTimeout(modeSwitchTimerRef.current);
-    const started = Date.now();
-    const finish = () => {
-      const wait = Math.max(0, MODE_SWITCH_MIN_MS - (Date.now() - started));
-      modeSwitchTimerRef.current = setTimeout(() => {
-        setModeSwitching(false);
-        modeSwitchTimerRef.current = null;
-      }, wait);
-    };
-
-    // Leaving provider mode must drop is_online, or dispatch still sends
-    // new_offer pushes while browsing as a customer.
-    if (
-      mode === "customer" &&
-      userMode === "provider" &&
-      hasSupabase &&
-      loggedInUser?.id
-    ) {
-      setIsProviderOnline(false);
-      void supabase
-        .from("provider_details")
-        .upsert(
-          {
-            id: loggedInUser.id,
-            is_online: false,
-            last_online_at: new Date().toISOString(),
-          },
-          { onConflict: "id" },
-        )
-        .then(() => finish(), () => finish());
-    } else {
-      finish();
+    if (hasSupabase && loggedInUser?.id) {
+      void (async () => {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData?.session?.access_token;
+        const claim = await setActiveRoleClaim(mode, { accessToken: token });
+        if (claim.ok) {
+          await supabase.auth.refreshSession();
+        }
+        if (mode === "customer" && userMode === "provider") {
+          providerOnlineHydrateGenRef.current += 1;
+          setIsProviderOnline(false);
+          await fetch("/api/providers/online", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-provider-id": loggedInUser.id,
+            },
+            body: JSON.stringify({ is_online: false }),
+          }).catch(() => {});
+        } else if (mode === "provider" && userMode === "customer") {
+          providerOnlineHydrateGenRef.current += 1;
+          setIsProviderOnline(true);
+          const pos = providerBrowseGeolocRef.current;
+          await fetch("/api/providers/online", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-provider-id": loggedInUser.id,
+            },
+            body: JSON.stringify({
+              is_online: true,
+              ...(pos &&
+              typeof pos.lat === "number" &&
+              typeof pos.lng === "number"
+                ? { lat: pos.lat, lng: pos.lng }
+                : {}),
+            }),
+          })
+            .then((res) => {
+              if (res.ok) providerSyncPendingOffersRef.current?.(true);
+            })
+            .catch(() => {});
+        }
+      })();
     }
-
     setUserMode(mode);
     setStep("map");
     setShowMenu(false);
@@ -13445,6 +13790,15 @@ export default function Page() {
   if (currentPage === "wallet") {
     return wrapWithIncomingOffer(
       <WalletPage onBack={handleBackToMenu} language={language} />,
+    );
+  }
+
+  if (currentPage === "admin") {
+    return wrapWithIncomingOffer(
+      <AdminVerificationsPage
+        onBack={handleBackToMenu}
+        language={language}
+      />,
     );
   }
 
@@ -13656,7 +14010,7 @@ export default function Page() {
     return (
       (activeProviderMapJob || customerActiveMapJob
         ? providerPos || mapCustomerPos
-        : customerBrowseLoc || geoloc) || OSLO_DEFAULT
+        : mapCustomerPos || geoloc) || OSLO_DEFAULT
     );
   })();
   const mapProviderPos = (() => {
@@ -13786,7 +14140,15 @@ export default function Page() {
       : providerJobStep === "waiting" && !mockIncomingRequest);
 
   return (
-    <main className="mx-auto h-[100dvh] w-full max-w-md bg-gradient-to-br from-orange-200 via-purple-200 to-purple-300 relative overflow-hidden">
+    <main
+      ref={mainContainerRef}
+      className="mx-auto h-[100dvh] w-full max-w-md bg-gradient-to-br from-orange-200 via-purple-200 to-purple-300 relative overflow-hidden"
+      style={
+        {
+          "--sheet-top-inset": `${sheetTopInsetPx}px`,
+        } as React.CSSProperties
+      }
+    >
       <Toaster richColors position="top-center" />
       {/* Hamburger Menu */}
       <HamburgerMenu
@@ -13798,7 +14160,17 @@ export default function Page() {
           void handleLogout();
         }}
         currentMode={userMode}
-        modeSwitching={modeSwitching}
+        canSwitchModes={accountRolesUi.can_switch_modes}
+        hasCustomerRole={accountRolesUi.has_customer}
+        hasProviderRole={accountRolesUi.has_provider}
+        onBecomeProvider={() => {
+          window.location.href = "/?provider_signup=1";
+        }}
+        onBookAService={() => {
+          setUserMode("customer");
+          setStep("map");
+          setShowMenu(false);
+        }}
         userName={hamburgerUserName}
         userAvatarUrl={userAvatarUrl}
         userRating={4.5}
@@ -13811,24 +14183,8 @@ export default function Page() {
         providerTier={providerDispatchTier}
         language={language}
         onLanguageChange={setLanguage}
+        showAdminVerifications={isAdminUser}
       />
-
-      {modeSwitching ? (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/35 backdrop-blur-[1px]">
-          <div className="flex flex-col items-center gap-3 rounded-2xl bg-white px-8 py-6 shadow-xl">
-            <Loader2 className="h-8 w-8 animate-spin text-gray-800" />
-            <p className="text-sm font-medium text-gray-800">
-              {userMode === "provider"
-                ? language === "en"
-                  ? "Switching to provider…"
-                  : "Bytter til tilbyder…"
-                : language === "en"
-                  ? "Switching to customer…"
-                  : "Bytter til kunde…"}
-            </p>
-          </div>
-        </div>
-      ) : null}
 
       {/* Second / next job while on an active job: top banner + dropdown. */}
       {step === "map" &&
@@ -14149,6 +14505,15 @@ export default function Page() {
                                 body: JSON.stringify({
                                   offer_id: acceptedOffer.offerId,
                                   provider_id: loggedInUser.id,
+                                  offer_shown_at: (() => {
+                                    const expiresMs = new Date(
+                                      String(acceptedOffer.expiresAt || ""),
+                                    ).getTime();
+                                    if (!Number.isFinite(expiresMs)) return null;
+                                    return new Date(
+                                      expiresMs - PROVIDER_OFFER_EXPIRES_MS,
+                                    ).toISOString();
+                                  })(),
                                 }),
                               });
                               const data = await res.json().catch(() => ({}));
@@ -14210,8 +14575,7 @@ export default function Page() {
           providerMarkerTone={providerMarkerTone}
           followCenter={mapFollowCenter}
           lockViewportToGridCell={mapLockToOneKmGrid}
-          viewportResetKey={orderId || mockIncomingRequest?.orderId || "browse"}
-          recenterNonce={mapRecenterNonce}
+          viewportResetKey={`${orderId || mockIncomingRequest?.orderId || "browse"}:${gpsRecenterNonce}`}
           customerMarkerOnTop={
             userMode === "customer" &&
             step === "rating" &&
@@ -14234,48 +14598,31 @@ export default function Page() {
         />
       </div>
 
-      {/* GPS recenter — above online toggle / bottom sheet (not overlapping) */}
-      {(step === "map" || step === "confirm") &&
-        !(
-          userMode === "provider" &&
-          providerJobStep !== "waiting" &&
-          Boolean(mockIncomingRequest)
-        ) && (
-          <button
-            type="button"
-            className="absolute right-4 z-30 flex h-11 w-11 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-800 shadow-md disabled:opacity-60"
-            style={{
-              // Provider online bar sits at bottom:175px (h-11). Clear it + sheet peek.
-              bottom:
-                step === "confirm"
-                  ? isBottomSheetCompressed
-                    ? 220
-                    : 360
-                  : userMode === "provider" &&
-                      providerJobStep === "waiting" &&
-                      isBottomSheetCompressed &&
-                      !showMenu
-                    ? 242
-                    : isBottomSheetCompressed
-                      ? 208
-                      : 340,
-            }}
-            onClick={() => void goToMyLocation()}
-            disabled={locatingGps}
-            title={
-              language === "en" ? "Use current GPS location" : "Bruk GPS-posisjon"
-            }
-            aria-label={
-              language === "en" ? "Use current GPS location" : "Bruk GPS-posisjon"
-            }
-          >
-            {locatingGps ? (
-              <Loader2 className="h-5 w-5 animate-spin" />
-            ) : (
-              <LocateFixed className="h-5 w-5" strokeWidth={2.25} />
-            )}
-          </button>
-        )}
+      {/* GPS recenter — bottom-right above the service sheet (mobile home map). */}
+      {(step === "map" || step === "confirm") && (
+        <button
+          type="button"
+          disabled={locatingGps}
+          aria-label={language === "en" ? "My location" : "Min posisjon"}
+          title={language === "en" ? "My location" : "Min posisjon"}
+          onClick={() => void goToMyLocation()}
+          className="pointer-events-auto absolute z-40 flex h-11 w-11 items-center justify-center rounded-full border border-black/10 bg-white text-gray-800 shadow-md disabled:opacity-60"
+          style={{
+            right: 16,
+            bottom: isBottomSheetCompressed
+              ? userMode === "provider"
+                ? 230 // sit above the online toggle (175px)
+                : 190
+              : 360,
+          }}
+        >
+          {locatingGps ? (
+            <Loader2 className="h-5 w-5 animate-spin" />
+          ) : (
+            <LocateFixed className="h-5 w-5" strokeWidth={2.25} />
+          )}
+        </button>
+      )}
 
       {/* Top Navigation Bar - Profile, Mode, Target all aligned - hide during active provider job */}
       {step === "map" &&
@@ -14422,7 +14769,10 @@ export default function Page() {
           providerJobStep !== "waiting" &&
           Boolean(mockIncomingRequest)
         ) && (
-          <div className="absolute top-0 left-0 right-0 z-50 pt-12 pb-4 px-4">
+          <div
+            ref={catalogTopChromeRef}
+            className="absolute top-0 left-0 right-0 z-50 pt-12 pb-4 px-4"
+          >
             <div className="glass-morphism-strong rounded-2xl p-3 animate-in slide-in-from-top-4 duration-300">
               <div className="flex items-center justify-between gap-3">
                 {/* Compact Target Switch - Dynamic based on mode */}
@@ -14777,35 +15127,36 @@ export default function Page() {
               className="h-12 w-12 rounded-full bg-red-500 hover:bg-red-600 text-white shadow-lg border-0"
               onClick={() => setShowEmergency(true)}
             >
-              <Siren className="h-5 w-5" strokeWidth={2.25} />
+              <span className="text-lg">🚨</span>
             </Button>
             {/* Phone Button - same as customer */}
             <Button
               size="icon"
               className="h-12 w-12 rounded-full glass-morphism-strong hover:glass-morphism-strong text-gray-800 shadow-lg border-0"
-              onClick={() =>
-                mockIncomingRequest &&
-                alert(
-                  language === "en"
-                    ? `Calling ${mockIncomingRequest.customer.name}`
-                    : `Ringer ${mockIncomingRequest.customer.name}`,
-                )
-              }
+              onClick={() => {
+                const tel = String(mockIncomingRequest?.customer?.phone || "")
+                  .trim()
+                  .replace(/[^\d+]/g, "");
+                if (!tel || tel === "+") {
+                  alert(
+                    language === "en"
+                      ? "No phone number saved in profile"
+                      : "Ingen telefonnummer lagret i profilen",
+                  );
+                  return;
+                }
+                window.location.href = `tel:${tel}`;
+              }}
             >
               <Phone className="h-5 w-5" />
             </Button>
             {/* Chat Button - same as customer */}
             <Button
               size="icon"
-              className="relative h-12 w-12 rounded-full glass-morphism-strong hover:glass-morphism-strong text-gray-800 shadow-lg border-0 overflow-visible"
+              className="h-12 w-12 rounded-full glass-morphism-strong hover:glass-morphism-strong text-gray-800 shadow-lg border-0"
               onClick={() => setShowChat(true)}
             >
               <MessageCircle className="h-5 w-5" strokeWidth={2.25} />
-              {orderChatUnreadBadge ? (
-                <span className="absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-red-500 text-white text-[11px] font-extrabold leading-5 text-center border-2 border-white">
-                  {orderChatUnreadBadge}
-                </span>
-              ) : null}
             </Button>
           </div>
         )}
@@ -15658,12 +16009,25 @@ export default function Page() {
         ) && (
           <div
             className={cn(
-              "absolute left-0 right-0 z-40 transition-all duration-300 ease-out swipeable",
-              isBottomSheetCompressed ? "bottom-0" : "bottom-0",
+              "absolute left-0 right-0 z-40 swipeable min-h-0",
+              isBottomSheetCompressed
+                ? "bottom-0 transition-all duration-300 ease-out"
+                : "bottom-0 flex h-full min-h-0 flex-col overflow-hidden",
             )}
-            onTouchStart={handleTouchStart}
-            onTouchMove={handleTouchMove}
-            onTouchEnd={handleTouchEnd}
+            style={
+              isBottomSheetCompressed
+                ? undefined
+                : {
+                    bottom: 0,
+                    height:
+                      "min(calc(100dvh - var(--sheet-top-inset, 8.5rem)), 580px)",
+                    maxHeight:
+                      "min(calc(100dvh - var(--sheet-top-inset, 8.5rem)), 580px)",
+                  }
+            }
+            onTouchStart={isBottomSheetCompressed ? handleTouchStart : undefined}
+            onTouchMove={isBottomSheetCompressed ? handleTouchMove : undefined}
+            onTouchEnd={isBottomSheetCompressed ? handleTouchEnd : undefined}
           >
             {isBottomSheetCompressed ? (
               /* Compressed state - small peek */
@@ -15713,9 +16077,10 @@ export default function Page() {
                       <p className="text-xs text-gray-600">
                         {userMode === "provider"
                           ? `${providerVisibleOnlineCount} / ${visibleServices.length} online`
-                          : `${visibleProviders.length} ${language === "en" ? `available for ${mode === "home" ? "delivery" : "provider"}` : `tilgjengelig for ${mode === "home" ? "delivery" : "provider"}`}`}
+                          : `${visibleBookableServiceCount} ${language === "en" ? "services available" : "tjenester tilgjengelig"}`}
                       </p>
                     </div>
+                    {userMode === "customer" ? (
                     <div className="flex flex-col items-end gap-0.5">
                       <div className="glass-morphism rounded-full p-1 flex">
                         <Button
@@ -15775,120 +16140,126 @@ export default function Page() {
                         </span>
                       )}
                     </div>
+                    ) : null}
                   </div>
                 </div>
               </div>
             ) : (
-              /* Expanded state - full service selection */
-              <div className="glass-morphism-strong rounded-t-3xl shadow-2xl max-h-[85vh] flex flex-col">
-                {/* Handle */}
-                <div
-                  className="flex justify-center pt-3 pb-2 cursor-pointer"
-                  onClick={() => setIsBottomSheetCompressed(true)}
-                >
-                  <div className="flex flex-col items-center">
-                    <div className="w-10 h-1 bg-gray-300 rounded-full mb-1"></div>
-                    <ChevronDown className="h-4 w-4 text-gray-400" />
+              /* Expanded: capped sheet, fixed header, cards scroll underneath */
+              <div className="glass-morphism-strong rounded-t-3xl shadow-2xl flex h-full min-h-0 flex-col overflow-hidden">
+                {/* Fixed header — handle, demand, title, toggle */}
+                <div className="shrink-0 bg-[#F8F8F8]/95 backdrop-blur-md rounded-t-3xl">
+                  <div
+                    className="flex justify-center pt-3 pb-2 cursor-pointer"
+                    onClick={() => setIsBottomSheetCompressed(true)}
+                    onTouchStart={handleTouchStart}
+                    onTouchMove={handleTouchMove}
+                    onTouchEnd={handleTouchEnd}
+                  >
+                    <div className="flex flex-col items-center">
+                      <div className="w-10 h-1 bg-gray-300 rounded-full mb-1"></div>
+                      <ChevronDown className="h-4 w-4 text-gray-400" />
+                    </div>
                   </div>
-                </div>
 
-                {/* Demand indicator - center */}
-                <div className="flex justify-center pb-2 px-4">
-                  {renderTopDemandIndicator()}
-                </div>
+                  <div className="flex justify-center pb-2 px-4">
+                    {renderTopDemandIndicator()}
+                  </div>
 
-                {/* Header with mode switch */}
-                <div className="px-4 pb-3">
-                  <div className="flex items-center justify-between mb-3">
-                    <div>
-                      <div className="flex items-center gap-1.5 mb-0.5">
-                        <div className="flex items-center gap-1 text-xs text-gray-500">
-                          <CategoryIcon
-                            appMode={appMode}
-                            category={resolvedCategoryId}
-                            label={activeCategory?.label}
-                            className="h-3 w-3"
-                          />
-                          <span>
-                            {t(activeCategory?.label || "") ||
-                              prettifyServiceName(resolvedCategoryId)}
+                  <div className="px-4 pb-3">
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <div className="flex items-center gap-1.5 mb-0.5">
+                          <div className="flex items-center gap-1 text-xs text-gray-500">
+                            <CategoryIcon
+                              appMode={appMode}
+                              category={resolvedCategoryId}
+                              label={activeCategory?.label}
+                              className="h-3 w-3"
+                            />
+                            <span>
+                              {t(activeCategory?.label || "") ||
+                                prettifyServiceName(resolvedCategoryId)}
+                            </span>
+                          </div>
+                          <span className="text-xs text-gray-400">•</span>
+                          <span className="text-xs text-gray-500">
+                            {activeTarget?.icon} {activeTarget?.label}
                           </span>
                         </div>
-                        <span className="text-xs text-gray-400">•</span>
-                        <span className="text-xs text-gray-500">
-                          {activeTarget?.icon} {activeTarget?.label}
-                        </span>
+                        <h2 className="text-lg font-semibold text-gray-900">
+                          {userMode === "provider"
+                            ? t("your_services")
+                            : `${t("select")} ${t(activeCategory?.label || "") || t("service")}`}
+                        </h2>
+                        <p className="text-sm text-gray-600">
+                          {userMode === "provider"
+                            ? `${providerVisibleOnlineCount} / ${visibleServices.length} online`
+                            : `${visibleBookableServiceCount} ${language === "en" ? "services available" : "tjenester tilgjengelig"}`}
+                        </p>
                       </div>
-                      <h2 className="text-lg font-semibold text-gray-900">
-                        {userMode === "provider"
-                          ? t("your_services")
-                          : `${t("select")} ${t(activeCategory?.label || "") || t("service")}`}
-                      </h2>
-                      <p className="text-sm text-gray-600">
-                        {userMode === "provider"
-                          ? `${providerVisibleOnlineCount} / ${visibleServices.length} online`
-                          : `${visibleServices.length} ${language === "en" ? "services available" : "tjenester tilgjengelig"}`}
-                      </p>
-                    </div>
-                    {/* Mode Switch with delivery price */}
-                    <div className="flex flex-col items-end gap-1">
-                      <div className="glass-morphism rounded-full p-1 flex">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className={cn(
-                            "h-8 px-3 rounded-full font-medium border-0 transition-all duration-300 text-sm",
-                            mode === "home"
-                              ? "glass-button-active"
-                              : "glass-button text-gray-700",
-                          )}
-                          title={
-                            mode === "home"
-                              ? language === "en"
-                                ? "You are currently providing delivery."
-                                : "Du tilbyr for øyeblikket Delivery."
-                              : language === "en"
-                                ? "Switch to delivery."
-                                : "Bytt til Delivery."
-                          }
-                          onClick={() => setMode("home")}
-                        >
-                          Delivery
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className={cn(
-                            "h-8 px-3 rounded-full font-medium border-0 transition-all duration-300 text-sm",
-                            mode === "provider"
-                              ? "glass-button-active"
-                              : "glass-button text-gray-700",
-                          )}
-                          title={
-                            mode === "provider"
-                              ? language === "en"
-                                ? "You are currently providing at provider."
-                                : "Du tilbyr for øyeblikket hos tilbyder."
-                              : language === "en"
-                                ? "Switch to at provider."
-                                : "Bytt til hos tilbyder."
-                          }
-                          onClick={() => setMode("provider")}
-                        >
-                          {t("at_provider")}
-                        </Button>
+                      {userMode === "customer" ? (
+                      <div className="flex flex-col items-end gap-1">
+                        <div className="glass-morphism rounded-full p-1 flex">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className={cn(
+                              "h-8 px-3 rounded-full font-medium border-0 transition-all duration-300 text-sm",
+                              mode === "home"
+                                ? "glass-button-active"
+                                : "glass-button text-gray-700",
+                            )}
+                            title={
+                              mode === "home"
+                                ? language === "en"
+                                  ? "Delivery selected."
+                                  : "Delivery valgt."
+                                : language === "en"
+                                  ? "Switch to delivery."
+                                  : "Bytt til Delivery."
+                            }
+                            onClick={() => setMode("home")}
+                          >
+                            Delivery
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className={cn(
+                              "h-8 px-3 rounded-full font-medium border-0 transition-all duration-300 text-sm",
+                              mode === "provider"
+                                ? "glass-button-active"
+                                : "glass-button text-gray-700",
+                            )}
+                            title={
+                              mode === "provider"
+                                ? language === "en"
+                                  ? "At provider selected."
+                                  : "Hos tilbyder valgt."
+                                : language === "en"
+                                  ? "Switch to at provider."
+                                  : "Bytt til hos tilbyder."
+                            }
+                            onClick={() => setMode("provider")}
+                          >
+                            {t("at_provider")}
+                          </Button>
+                        </div>
+                        {mode === "home" && (
+                          <span className="text-xs text-gray-500">
+                            +{formatDeliveryRateLabel(language)}
+                          </span>
+                        )}
                       </div>
-                      {mode === "home" && (
-                        <span className="text-xs text-gray-500">
-                          +{formatDeliveryRateLabel(language)}
-                        </span>
-                      )}
+                      ) : null}
                     </div>
                   </div>
                 </div>
 
-                {/* Compact cards - scrollable area */}
-                <div className="px-4 space-y-2 pb-4 overflow-y-auto flex-1 min-h-0">
+                {/* Scrollable service list — header above stays put */}
+                <div className="relative min-h-0 flex-1">
+                  <div className="absolute inset-0 overflow-y-auto overscroll-contain touch-pan-y px-4 space-y-2 py-2">
                   {visibleServices.length > 0 ? (
                     visibleServices.map((style, index) => {
                       const isExpanded = expandedStyleId === style.id;
@@ -15962,11 +16333,23 @@ export default function Page() {
                         userMode === "provider"
                           ? providerDemandTier
                           : customerDemandTier;
+                      const skillModeKey = normalizeServiceId(
+                        matchedRegisteredServiceId || style.id,
+                      );
+                      const skillDeliveryMode =
+                        providerSkillModes[skillModeKey] ||
+                        providerSkillModes[normalizeServiceId(style.id)] ||
+                        "both";
+                      const cardDimmed =
+                        userMode === "customer" && statusTier === "closed";
 
                       return (
                         <div
                           key={style.id}
-                          className="glass-morphism rounded-xl overflow-hidden border-0"
+                          className={cn(
+                            "glass-morphism rounded-xl overflow-hidden border-0",
+                            cardDimmed && "opacity-50",
+                          )}
                         >
                           {/* Compact card */}
                           <div
@@ -15994,7 +16377,7 @@ export default function Page() {
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-3">
                                 {/* Category-specific icon */}
-                                <div className="w-10 h-10 glass-morphism rounded-lg flex items-center justify-center border-0 text-gray-700">
+                                <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-[#F3F4F2] border-0 text-gray-700">
                                   <CategoryIcon
                                     appMode={appMode}
                                     category={category}
@@ -16048,6 +16431,77 @@ export default function Page() {
                                       {displayAvailability}
                                     </span>
                                   </div>
+                                  {userMode === "provider" &&
+                                  canProviderUseService ? (
+                                    <div
+                                      className="mt-2 flex items-center gap-1.5"
+                                      onClick={(e) => e.stopPropagation()}
+                                      onKeyDown={(e) => e.stopPropagation()}
+                                    >
+                                      <div
+                                        className={cn(
+                                          "glass-morphism rounded-full p-0.5 flex",
+                                          skillDeliveryMode === "both" &&
+                                            "opacity-40",
+                                        )}
+                                      >
+                                        <button
+                                          type="button"
+                                          className={cn(
+                                            "h-6 px-2 rounded-full text-[10px] font-medium transition-all",
+                                            skillDeliveryMode === "home"
+                                              ? "bg-white text-gray-900 shadow-sm"
+                                              : "text-gray-600",
+                                          )}
+                                          onClick={() =>
+                                            void setProviderSkillModePersisted(
+                                              matchedRegisteredServiceId ||
+                                                style.id,
+                                              "home",
+                                            )
+                                          }
+                                        >
+                                          Delivery
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className={cn(
+                                            "h-6 px-2 rounded-full text-[10px] font-medium transition-all",
+                                            skillDeliveryMode === "provider"
+                                              ? "bg-white text-gray-900 shadow-sm"
+                                              : "text-gray-600",
+                                          )}
+                                          onClick={() =>
+                                            void setProviderSkillModePersisted(
+                                              matchedRegisteredServiceId ||
+                                                style.id,
+                                              "provider",
+                                            )
+                                          }
+                                        >
+                                          {t("at_provider")}
+                                        </button>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        className={cn(
+                                          "h-6 px-2 rounded-full text-[10px] font-medium border transition-all",
+                                          skillDeliveryMode === "both"
+                                            ? "bg-green-500 text-white border-green-500"
+                                            : "bg-white/50 text-gray-600 border-white/40",
+                                        )}
+                                        onClick={() =>
+                                          void setProviderSkillModePersisted(
+                                            matchedRegisteredServiceId ||
+                                              style.id,
+                                            "both",
+                                          )
+                                        }
+                                      >
+                                        {language === "en" ? "Both" : "Begge"}
+                                      </button>
+                                    </div>
+                                  ) : null}
                                 </div>
                               </div>
 
@@ -16084,48 +16538,43 @@ export default function Page() {
                                     </button>
                                   ) : (
                                     /* Locked - not registered */
-                                    <button
-                                      type="button"
-                                      className="flex items-center gap-1.5 text-gray-400 hover:text-gray-600 transition-colors"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        e.preventDefault();
-                                        setShowMenu(false);
-                                        setCurrentPage("skills");
-                                      }}
-                                    >
+                                    <div className="flex items-center gap-1.5 text-gray-400">
                                       <Lock className="h-4 w-4" />
                                       <span className="text-xs">
                                         {t("add_to_skills")}
                                       </span>
-                                    </button>
+                                    </div>
                                   )
                                 ) : (
-                                  /* Price for customer */
+                                  /* Price for customer — closed: label stays under title only */
                                   <div className="flex items-center gap-1.5">
-                                    {customerDemandTier ? (
-                                      <span
-                                        className={cn(
-                                          "text-sm font-semibold leading-none",
-                                          tierTextClass(customerDemandTier),
-                                        )}
-                                        aria-hidden
-                                      >
-                                        {tierPriceArrow(customerDemandTier)}
-                                      </span>
-                                    ) : null}
-                                    <div
-                                      className={cn(
-                                        "font-bold text-base tabular-nums min-w-[3.5rem] text-right",
-                                        customerBulkPricesLoading
-                                          ? "text-gray-400"
-                                          : "text-gray-900",
-                                      )}
-                                    >
-                                      {customerBulkPricesLoading
-                                        ? "···"
-                                        : formatPrice(basePrice)}
-                                    </div>
+                                    {customerDemandTier === "closed" ? null : (
+                                      <>
+                                        {customerDemandTier ? (
+                                          <span
+                                            className={cn(
+                                              "text-sm font-semibold leading-none",
+                                              tierTextClass(customerDemandTier),
+                                            )}
+                                            aria-hidden
+                                          >
+                                            {tierPriceArrow(customerDemandTier)}
+                                          </span>
+                                        ) : null}
+                                        <div
+                                          className={cn(
+                                            "font-bold text-base tabular-nums min-w-[3.5rem] text-right",
+                                            customerBulkPricesLoading
+                                              ? "text-gray-400"
+                                              : "text-gray-900",
+                                          )}
+                                        >
+                                          {customerBulkPricesLoading
+                                            ? "···"
+                                            : formatPrice(basePrice)}
+                                        </div>
+                                      </>
+                                    )}
                                   </div>
                                 )}
                                 {isExpanded ? (
@@ -16217,6 +16666,14 @@ export default function Page() {
                                               +{formatPrice(addon.price)}
                                             </span>
                                           </div>
+                                          {mode === "home" &&
+                                          isEquipmentDependentAddon(
+                                            addon.id,
+                                          ) ? (
+                                            <p className="text-[10px] text-gray-400 mt-1 pl-6">
+                                              {t("addon_home_visit_may_vary")}
+                                            </p>
+                                          ) : null}
                                         </button>
                                       );
                                     })}
@@ -16259,11 +16716,22 @@ export default function Page() {
                       </Button>
                     </div>
                   )}
+                  </div>
                 </div>
 
                 {/* Bottom section with payment and confirm - Fixed positioning - only for customer */}
-                {userMode === "customer" && (
-                  <div className="border-t border-white/20 p-4 space-y-2 bg-white/20 backdrop-blur-md flex-shrink-0">
+                {userMode === "customer" && (() => {
+                  const expandedStyle = expandedStyleId
+                    ? visibleServices.find((s) => s.id === expandedStyleId)
+                    : null;
+                  const expandedClosed =
+                    !!expandedStyle &&
+                    customerDemandTierFromPrices(
+                      bookingPricingServiceId(expandedStyle),
+                      dynamicPrices,
+                    ) === "closed";
+                  return (
+                  <div className="shrink-0 border-t border-white/20 p-4 space-y-2 bg-white/20 backdrop-blur-md pb-[max(1rem,env(safe-area-inset-bottom,0px))]">
                     <div className="flex items-center justify-end">
                       <button
                         className="flex items-center gap-1.5 px-2 py-1 glass-morphism border-0 rounded-lg hover:bg-white/30 transition-colors"
@@ -16320,30 +16788,31 @@ export default function Page() {
                     <Button
                       className={cn(
                         "w-full h-12 text-base font-semibold rounded-xl border-0 transition-all duration-300",
-                        expandedStyleId
+                        expandedStyleId && !expandedClosed
                           ? "bg-green-500 hover:bg-green-600 text-white"
                           : "glass-morphism text-gray-500 cursor-not-allowed",
                       )}
-                      disabled={!expandedStyleId}
+                      disabled={!expandedStyleId || expandedClosed}
                       onClick={() => {
-                        const style = visibleServices.find(
-                          (s) => s.id === expandedStyleId,
-                        );
-                        if (style) {
-                          // Clear any previous provider-matching error when starting a fresh selection.
-                          setMatchError(null);
-                          clearBookingLockState();
-                          setSelectedStyle(style);
-                          setStep("confirm");
-                        }
+                        if (!expandedStyle || expandedClosed) return;
+                        // Clear any previous provider-matching error when starting a fresh selection.
+                        setMatchError(null);
+                        clearBookingLockState();
+                        setSelectedStyle(expandedStyle);
+                        setStep("confirm");
                       }}
                     >
-                      {expandedStyleId
-                        ? t("confirm_selection")
-                        : t("select_service")}
+                      {expandedClosed
+                        ? language === "en"
+                          ? "No providers available right now"
+                          : "Ingen tilbydere tilgjengelig nå"
+                        : expandedStyleId
+                          ? t("confirm_selection")
+                          : t("select_service")}
                     </Button>
                   </div>
-                )}
+                  );
+                })()}
               </div>
             )}
           </div>
@@ -16642,21 +17111,27 @@ export default function Page() {
             className="h-12 w-12 rounded-full bg-red-500 hover:bg-red-600 text-white shadow-lg border-0"
             onClick={() => setShowEmergency(true)}
           >
-            <Siren className="h-5 w-5" strokeWidth={2.25} />
+            <span className="text-lg">🚨</span>
           </Button>
 
           {/* Phone Button */}
           <Button
             size="icon"
             className="h-12 w-12 rounded-full glass-morphism-strong hover:glass-morphism-strong text-gray-800 shadow-lg border-0"
-            onClick={() =>
-              provider &&
-              alert(
-                language === "en"
-                  ? `Calling ${provider.name}`
-                  : `Ringer ${provider.name}`,
-              )
-            }
+            onClick={() => {
+              const tel = String(provider?.phone || "")
+                .trim()
+                .replace(/[^\d+]/g, "");
+              if (!tel || tel === "+") {
+                alert(
+                  language === "en"
+                    ? "No phone number saved in profile"
+                    : "Ingen telefonnummer lagret i profilen",
+                );
+                return;
+              }
+              window.location.href = `tel:${tel}`;
+            }}
           >
             <Phone className="h-5 w-5" />
           </Button>
@@ -16664,15 +17139,10 @@ export default function Page() {
           {/* Chat Button */}
           <Button
             size="icon"
-            className="relative h-12 w-12 rounded-full glass-morphism-strong hover:glass-morphism-strong text-gray-800 shadow-lg border-0 overflow-visible"
+            className="h-12 w-12 rounded-full glass-morphism-strong hover:glass-morphism-strong text-gray-800 shadow-lg border-0"
             onClick={() => setShowChat(true)}
           >
-            <MessageCircle className="h-5 w-5" strokeWidth={2.25} />
-            {orderChatUnreadBadge ? (
-              <span className="absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-red-500 text-white text-[11px] font-extrabold leading-5 text-center border-2 border-white">
-                {orderChatUnreadBadge}
-              </span>
-            ) : null}
+            <span className="text-lg">💬</span>
           </Button>
         </div>
       )}
@@ -16998,10 +17468,17 @@ export default function Page() {
                                         : `• Meet ${provider.name} at the ${APP_MODES[appMode].locationName} within ${eta} minutes`}
                                 </p>
                                 <p>
-                                  • Adresse: Fresh Up Sentrum, Karl Johans gate
-                                  1
+                                  •{" "}
+                                  {language === "no"
+                                    ? "Adresse: Fresh Up Sentrum, Karl Johans gate 1"
+                                    : "Address: Fresh Up Sentrum, Karl Johans gate 1"}
                                 </p>
-                                <p>• Oppgi kode {provider.code} ved ankomst</p>
+                                <p>
+                                  •{" "}
+                                  {language === "no"
+                                    ? `Oppgi kode ${provider.code} ved ankomst`
+                                    : `Provide code ${provider.code} on arrival`}
+                                </p>
                               </div>
                             </div>
                           )}
@@ -17062,7 +17539,7 @@ export default function Page() {
           <div className="glass-morphism-strong rounded-3xl p-6 w-full max-w-sm border-0">
             <div className="text-center space-y-4">
               <div className="w-16 h-16 bg-red-500 rounded-full flex items-center justify-center mx-auto">
-                <Siren className="h-8 w-8 text-white" strokeWidth={2.25} />
+                <span className="text-2xl text-white">🚨</span>
               </div>
 
               <div>

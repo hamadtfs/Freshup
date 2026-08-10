@@ -19,6 +19,8 @@ export interface MatchProvidersRequest {
   min_rating?: number;
   /** M2 performance tier; dispatch tick runs gold → silver → bronze per batch. */
   performance_tier?: "gold" | "silver" | "bronze" | null;
+  /** Exclude this customer from matches (self-booking). */
+  customer_id?: string | null;
 }
 
 export interface MatchingProvider {
@@ -88,6 +90,7 @@ function matchProvidersRpcBasePayload(request: MatchProvidersRequest) {
 }
 
 let warnedMissingPerformanceTierRpc = false;
+let warnedMissingCustomerIdRpc = false;
 
 function isMissingPerformanceTierRpcOverload(error: {
   code?: string;
@@ -97,6 +100,16 @@ function isMissingPerformanceTierRpcOverload(error: {
   if (error.code !== "PGRST202") return false;
   const blob = `${error.message ?? ""} ${error.details ?? ""}`;
   return blob.includes("p_performance_tier");
+}
+
+function isMissingCustomerIdRpcOverload(error: {
+  code?: string;
+  message?: string;
+  details?: string | null;
+}): boolean {
+  if (error.code !== "PGRST202") return false;
+  const blob = `${error.message ?? ""} ${error.details ?? ""}`;
+  return blob.includes("p_customer_id");
 }
 
 /** Same as matchProviders but preserves RPC errors (for dispatch_tick diagnostics). */
@@ -110,11 +123,26 @@ export async function matchProvidersWithRpcError(
   rpcAppliesPerformanceTier: boolean;
 }> {
   const base = matchProvidersRpcBasePayload(request);
+  const customerId = request.customer_id?.trim() || null;
   let rpcAppliesPerformanceTier = true;
   let { data, error } = await supabase.rpc("match_providers", {
     ...base,
     p_performance_tier: request.performance_tier ?? null,
+    p_customer_id: customerId,
   });
+
+  if (error && isMissingCustomerIdRpcOverload(error)) {
+    if (!warnedMissingCustomerIdRpc) {
+      warnedMissingCustomerIdRpc = true;
+      console.warn(
+        "[matchProviders] PostgREST has no match_providers(..., p_customer_id); retrying without it until DB is migrated (20260804150000_match_providers_skill_service_mode.sql). Filtering self-match in app.",
+      );
+    }
+    ({ data, error } = await supabase.rpc("match_providers", {
+      ...base,
+      p_performance_tier: request.performance_tier ?? null,
+    }));
+  }
 
   if (error && isMissingPerformanceTierRpcOverload(error)) {
     rpcAppliesPerformanceTier = false;
@@ -140,8 +168,13 @@ export async function matchProvidersWithRpcError(
     };
   }
 
+  let rows = mapMatchProviderRows(data);
+  if (customerId) {
+    rows = rows.filter((p) => p.provider_id !== customerId);
+  }
+
   return {
-    rows: mapMatchProviderRows(data),
+    rows,
     error: null,
     rpcAppliesPerformanceTier,
   };
@@ -241,6 +274,7 @@ export async function dispatchOrderById(
     scheduled_at: order.scheduled_at,
     max_distance_km: 10,
     min_rating: 2.0,
+    customer_id: order.customer_id ? String(order.customer_id) : null,
   });
 
   if (matches.length > 0) {

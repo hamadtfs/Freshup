@@ -122,6 +122,18 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    if (quote.marketClosed) {
+      return NextResponse.json(
+        {
+          error: "MARKET_CLOSED",
+          message: "No providers available right now for this service nearby.",
+          market_closed: true,
+          online_providers_nearby: quote.onlineProvidersNearby,
+        },
+        { status: 422 },
+      );
+    }
+
     // Pre-match booking: 1 km default (160 kr min fee) until a provider is assigned.
     // Real driving km is applied on the matched provider offer, not at lock time.
     let deliveryKm: number | null = null;

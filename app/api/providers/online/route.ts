@@ -7,6 +7,8 @@ export async function POST(req: NextRequest) {
     const body = (await req.json().catch(() => ({}))) as {
       is_online?: unknown
       heartbeat?: unknown
+      lat?: unknown
+      lng?: unknown
     }
     const providerId = req.headers.get("x-provider-id")
 
@@ -41,6 +43,22 @@ export async function POST(req: NextRequest) {
         .eq("is_online", true)
       if (error) throw error
 
+      const lat =
+        typeof body.lat === "number" && Number.isFinite(body.lat)
+          ? body.lat
+          : undefined
+      const lng =
+        typeof body.lng === "number" && Number.isFinite(body.lng)
+          ? body.lng
+          : undefined
+      if (lat != null && lng != null) {
+        await supabase
+          .from("provider_details")
+          .update({ lat, lng })
+          .eq("id", providerId)
+          .eq("is_online", true)
+      }
+
       return NextResponse.json({
         success: true,
         is_online: true,
@@ -49,6 +67,14 @@ export async function POST(req: NextRequest) {
     }
 
     const is_online = Boolean(body.is_online)
+    const lat =
+      typeof body.lat === "number" && Number.isFinite(body.lat)
+        ? body.lat
+        : undefined
+    const lng =
+      typeof body.lng === "number" && Number.isFinite(body.lng)
+        ? body.lng
+        : undefined
     const { error } = await supabase
       .from("provider_details")
       .upsert(
@@ -56,6 +82,7 @@ export async function POST(req: NextRequest) {
           id: providerId,
           is_online,
           last_online_at: nowIso,
+          ...(lat != null && lng != null ? { lat, lng } : {}),
         },
         { onConflict: "id" },
       )

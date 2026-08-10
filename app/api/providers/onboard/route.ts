@@ -17,6 +17,8 @@ interface OnboardingPayload {
     services: {
       service_id: string
       competence_rating: number
+      /** Per-service delivery mode (home | provider | both). Spec source of truth. */
+      service_mode_id?: "home" | "provider" | "both"
     }[]
   }[]
 }
@@ -28,6 +30,28 @@ function resolveServiceModeId(deliveryModes: string[]): "home" | "provider" | "b
   if (hasHome && hasProvider) return "both"
   if (hasProvider) return "provider"
   return "home"
+}
+
+function normalizeServiceModeId(
+  value: unknown,
+  fallback: "home" | "provider" | "both",
+): "home" | "provider" | "both" {
+  const raw = String(value || "")
+    .toLowerCase()
+    .trim()
+  if (raw === "home" || raw === "provider" || raw === "both") return raw
+  if (raw === "at_provider") return "provider"
+  return fallback
+}
+
+function offersFromServiceMode(mode: "home" | "provider" | "both"): {
+  offers_home: boolean
+  offers_at_provider: boolean
+} {
+  return {
+    offers_home: mode === "home" || mode === "both",
+    offers_at_provider: mode === "provider" || mode === "both",
+  }
 }
 
 function serviceSignature(value: string): string {
@@ -84,7 +108,9 @@ async function persistDirect(providerId: string, payload: OnboardingPayload) {
 
   const { data: existing, error: existingErr } = await supabase
     .from("provider_details")
-    .select("business_name, description, phone, address, lat, lng, delivery_modes")
+    .select(
+      "business_name, description, phone, address, lat, lng, delivery_modes, default_address, default_lat, default_lng",
+    )
     .eq("id", providerId)
     .maybeSingle()
   if (existingErr) throw existingErr
@@ -108,20 +134,44 @@ async function persistDirect(providerId: string, payload: OnboardingPayload) {
   } else if (existing?.phone) {
     detailPatch.phone = existing.phone
   }
-  if (typeof payload.address === "string" && payload.address.trim()) {
-    detailPatch.address = payload.address.trim()
-  } else if (existing?.address) {
-    detailPatch.address = existing.address
+
+  const resolvedAddress =
+    typeof payload.address === "string" && payload.address.trim()
+      ? payload.address.trim()
+      : existing?.address
+        ? String(existing.address)
+        : null
+  if (resolvedAddress) {
+    detailPatch.address = resolvedAddress
+    detailPatch.default_address = resolvedAddress
+  } else if (existing?.default_address) {
+    detailPatch.default_address = existing.default_address
   }
-  if (payload.lat != null) {
-    detailPatch.lat = payload.lat
-  } else if (existing?.lat != null) {
-    detailPatch.lat = existing.lat
+
+  const resolvedLat =
+    payload.lat != null && Number.isFinite(Number(payload.lat))
+      ? Number(payload.lat)
+      : existing?.lat != null && Number.isFinite(Number(existing.lat))
+        ? Number(existing.lat)
+        : null
+  const resolvedLng =
+    payload.lng != null && Number.isFinite(Number(payload.lng))
+      ? Number(payload.lng)
+      : existing?.lng != null && Number.isFinite(Number(existing.lng))
+        ? Number(existing.lng)
+        : null
+
+  if (resolvedLat != null) {
+    detailPatch.lat = resolvedLat
+    detailPatch.default_lat = resolvedLat
+  } else if (existing?.default_lat != null) {
+    detailPatch.default_lat = existing.default_lat
   }
-  if (payload.lng != null) {
-    detailPatch.lng = payload.lng
-  } else if (existing?.lng != null) {
-    detailPatch.lng = existing.lng
+  if (resolvedLng != null) {
+    detailPatch.lng = resolvedLng
+    detailPatch.default_lng = resolvedLng
+  } else if (existing?.default_lng != null) {
+    detailPatch.default_lng = existing.default_lng
   }
 
   const { error: detailsErr } = await supabase
@@ -357,6 +407,10 @@ async function persistDirect(providerId: string, payload: OnboardingPayload) {
       )
       if (categoryErr) throw categoryErr
 
+      const skillMode = normalizeServiceModeId(
+            service.service_mode_id,
+            serviceModeId,
+          )
       const { error: skillErr } = await supabase.from("provider_skills").upsert(
         {
           provider_id: providerId,
@@ -367,7 +421,8 @@ async function persistDirect(providerId: string, payload: OnboardingPayload) {
           mode_id: resolvedModeId,
           target_id: finalTargetId,
           category_id: finalCategoryId,
-          service_mode_id: serviceModeId,
+          service_mode_id: skillMode,
+          ...offersFromServiceMode(skillMode),
         },
         { onConflict: "provider_id,service_id" },
       )
@@ -375,6 +430,14 @@ async function persistDirect(providerId: string, payload: OnboardingPayload) {
       persistedSkillCount += 1
     }
   }
+
+  // Explicit provider grant (pending until admin verification).
+  await supabase.rpc("upsert_account_role_grant", {
+    p_user_id: providerId,
+    p_role: "provider",
+    p_status: "pending",
+    p_activate: false,
+  })
 
   return {
     success: true,
@@ -386,12 +449,16 @@ async function persistDirect(providerId: string, payload: OnboardingPayload) {
 
 export async function POST(req: NextRequest) {
   try {
+    const supabase = createAdminClient()
+    const { getUserIdFromBearer } = await import("@/lib/supabase/route-user")
+    const fromBearer = await getUserIdFromBearer(supabase, req)
     const payload: OnboardingPayload = await req.json()
-    const providerId = req.headers.get("x-provider-id") // Set by middleware with auth
+    const providerId =
+      fromBearer || req.headers.get("x-provider-id")?.trim() || null
 
     if (!providerId) {
       return NextResponse.json(
-        { error: "Unauthorized" },
+        { error: "Unauthorized", message: "Sign in with phone before onboarding." },
         { status: 401 }
       )
     }
@@ -402,6 +469,42 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       )
     }
+
+    let lat = Number(payload.lat)
+    let lng = Number(payload.lng)
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      // Skills updates often omit GPS — reuse saved provider/profile coords.
+      const [{ data: existing }, { data: profile }] = await Promise.all([
+        supabase
+          .from("provider_details")
+          .select("lat, lng")
+          .eq("id", providerId)
+          .maybeSingle(),
+        supabase
+          .from("profiles")
+          .select("lat, lng")
+          .eq("id", providerId)
+          .maybeSingle(),
+      ])
+      const fallbackLat = Number(existing?.lat ?? profile?.lat)
+      const fallbackLng = Number(existing?.lng ?? profile?.lng)
+      if (Number.isFinite(fallbackLat) && Number.isFinite(fallbackLng)) {
+        lat = fallbackLat
+        lng = fallbackLng
+      }
+    }
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return NextResponse.json(
+        {
+          error: "missing_coordinates",
+          message:
+            "Set your default service location in profile before saving skills.",
+        },
+        { status: 400 },
+      )
+    }
+    payload.lat = lat
+    payload.lng = lng
 
     const direct = await persistDirect(providerId, payload)
     return NextResponse.json(direct)

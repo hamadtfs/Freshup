@@ -4,6 +4,10 @@ import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { completeOAuthSession } from "@/lib/auth/complete-oauth-session"
 import { consumeOAuthPending } from "@/lib/auth/oauth-pending"
+import {
+  beginProviderSignupInProgress,
+  setProviderSignupResumeStep,
+} from "@/lib/auth/provider-signup-gate"
 import { createBrowserSupabaseClient } from "@/lib/supabase/client"
 
 export default function AuthCallbackPage() {
@@ -48,6 +52,15 @@ export default function AuthCallbackPage() {
       try {
         const pending = consumeOAuthPending()
         await completeOAuthSession(supabase, userId, pending)
+        // Incomplete phone-first provider signup — return to login UI for profile→….
+        if (
+          pending?.role === "provider" &&
+          pending.providerSignupContinue &&
+          !pending.providerOnboarding
+        ) {
+          beginProviderSignupInProgress("profile")
+          setProviderSignupResumeStep("profile")
+        }
       } catch (e) {
         const message =
           e instanceof Error ? e.message : "Could not finish sign-in."

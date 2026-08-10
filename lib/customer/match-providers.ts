@@ -1,7 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { haversineKm } from "@/lib/geo"
 import { providerPresenceCutoffIso } from "@/lib/provider/presence"
-import { providerDeliveryModesAllowServiceMode } from "@/lib/provider/accepting-mode"
 import type { DeliveryMode, MatchedProvider, ServiceModeId } from "@/lib/customer/types"
 
 /**
@@ -23,6 +22,8 @@ export type MatchProvidersInput = {
   deliveryMode: DeliveryMode
   customerLat: number
   customerLng: number
+  /** When set, exclude this user from matches (self-booking). */
+  customerId?: string | null
 }
 
 function allowedServiceModeIds(deliveryMode: DeliveryMode): string[] {
@@ -65,8 +66,7 @@ export async function matchProviders(supabase: SupabaseClient, input: MatchProvi
           .filter(
             (s) =>
               s.available_now !== false &&
-              (!s.service_mode_id ||
-                s.service_mode_id === "both" ||
+              (s.service_mode_id === "both" ||
                 input.serviceModeId === "both" ||
                 (s.service_mode_id as string) === input.serviceModeId),
           )
@@ -77,11 +77,18 @@ export async function matchProviders(supabase: SupabaseClient, input: MatchProvi
 
   if (candidateProviderIds.length === 0) return []
 
+  const customerId = input.customerId?.trim() || null
+  if (customerId) {
+    candidateProviderIds = candidateProviderIds.filter((id) => id !== customerId)
+  }
+  if (candidateProviderIds.length === 0) return []
+
   const { data: busyRows } = await supabase
     .from("orders")
-    .select("provider_id, status, ready_for_next_request_at")
+    .select("provider_id, status, ready_for_next_request_at, is_test")
     .in("status", [...BLOCKING_ORDER_STATUSES])
     .not("provider_id", "is", null)
+    .eq("is_test", false)
 
   const busy = new Set<string>()
   for (const r of busyRows ?? []) {
@@ -94,7 +101,7 @@ export async function matchProviders(supabase: SupabaseClient, input: MatchProvi
   const { data: detailsList, error: detailsErr } = await supabase
     .from("provider_details")
     .select(
-      "id, business_name, lat, lng, is_online, avg_rating, last_online_at, delivery_modes",
+      "id, business_name, lat, lng, is_online, avg_rating, last_online_at",
     )
     .in("id", candidateProviderIds)
     .eq("is_online", true)
@@ -124,14 +131,6 @@ export async function matchProviders(supabase: SupabaseClient, input: MatchProvi
   for (const pd of detailsList) {
     if (!availableByProvider.has(pd.id as string)) continue
     if (!pd.is_online) continue
-    if (
-      !providerDeliveryModesAllowServiceMode(
-        (pd as { delivery_modes?: unknown }).delivery_modes,
-        input.serviceModeId,
-      )
-    ) {
-      continue
-    }
     if (busy.has(pd.id as string)) continue
     const plat = pd.lat != null ? Number(pd.lat) : NaN
     const plng = pd.lng != null ? Number(pd.lng) : NaN

@@ -23,6 +23,7 @@ import {
   ArrowLeft,
   Gift,
   Share2,
+  ShieldCheck,
   Wallet,
 } from "lucide-react"
 type UserMode = "customer" | "provider"
@@ -56,12 +57,16 @@ interface ProviderStats {
 interface HamburgerMenuProps {
   isOpen: boolean
   onClose: () => void
-  onNavigate: (page: "orders" | "support" | "about" | "payment" | "earnings" | "wallet" | "skills" | "profile" | "stats") => void
+  onNavigate: (page: "orders" | "support" | "about" | "payment" | "earnings" | "wallet" | "skills" | "profile" | "stats" | "admin") => void
   onModeChange: (mode: UserMode) => void
   onLogout: () => void
   currentMode: UserMode
-  /** True while customer ↔ provider mode switch is in progress. */
-  modeSwitching?: boolean
+  /** When true, show Customer/Provider toggle. Otherwise Become a provider / Book a service. */
+  canSwitchModes?: boolean
+  hasCustomerRole?: boolean
+  hasProviderRole?: boolean
+  onBecomeProvider?: () => void
+  onBookAService?: () => void
   userName?: string
   userAvatarUrl?: string
   userRating?: number
@@ -74,6 +79,7 @@ interface HamburgerMenuProps {
   providerTier?: Tier
   language?: Language
   onLanguageChange?: (lang: Language) => void
+  showAdminVerifications?: boolean
 }
 
 export default function HamburgerMenu({
@@ -83,7 +89,11 @@ export default function HamburgerMenu({
   onModeChange,
   onLogout,
   currentMode,
-  modeSwitching = false,
+  canSwitchModes = false,
+  hasCustomerRole = false,
+  hasProviderRole = false,
+  onBecomeProvider,
+  onBookAService,
   userName = "User",
   userAvatarUrl,
   userRating = 4.5,
@@ -96,6 +106,7 @@ export default function HamburgerMenu({
   providerTier,
   language = "no",
   onLanguageChange,
+  showAdminVerifications = false,
 }: HamburgerMenuProps) {
   const isEn = language === "en"
   const [showStats, setShowStats] = useState(false)
@@ -141,23 +152,36 @@ export default function HamburgerMenu({
     </div>
   )
 
+  const adminMenuItem = showAdminVerifications
+    ? {
+        id: "admin" as const,
+        label: isEn ? "Approvals" : "Godkjenninger",
+        icon: ShieldCheck,
+      }
+    : null
+
   const customerMenuItems = [
-    { id: "payment", label: isEn ? "Payment" : "Betaling", icon: CreditCard },
-    { id: "orders", label: isEn ? "Orders" : "Bestillinger", icon: Calendar },
-    { id: "support", label: isEn ? "Help" : "Hjelp", icon: Headphones },
-    { id: "about", label: isEn ? "About" : "Om oss", icon: Info },
-  ] as const
+    { id: "payment" as const, label: isEn ? "Payment" : "Betaling", icon: CreditCard },
+    { id: "orders" as const, label: isEn ? "Orders" : "Bestillinger", icon: Calendar },
+    { id: "support" as const, label: isEn ? "Help" : "Hjelp", icon: Headphones },
+    { id: "about" as const, label: isEn ? "About" : "Om oss", icon: Info },
+    ...(adminMenuItem ? [adminMenuItem] : []),
+  ]
 
   const providerMenuItems = [
-    { id: "stats", label: isEn ? "My Stats" : "Min status", icon: Trophy },
-    { id: "earnings", label: isEn ? "Earnings" : "Inntjening", icon: TrendingUp },
-    { id: "wallet", label: isEn ? "Wallet" : "Lommebok", icon: Wallet },
-    { id: "skills", label: isEn ? "Skills" : "Ferdigheter", icon: Sparkles },
-    { id: "orders", label: isEn ? "Jobs" : "Oppdrag", icon: Calendar },
-    { id: "support", label: isEn ? "Help" : "Hjelp", icon: Headphones },
-  ] as const
+    { id: "stats" as const, label: isEn ? "My Stats" : "Min status", icon: Trophy },
+    { id: "earnings" as const, label: isEn ? "Earnings" : "Inntjening", icon: TrendingUp },
+    { id: "wallet" as const, label: isEn ? "Wallet" : "Lommebok", icon: Wallet },
+    { id: "skills" as const, label: isEn ? "Skills" : "Ferdigheter", icon: Sparkles },
+    { id: "orders" as const, label: isEn ? "Jobs" : "Oppdrag", icon: Calendar },
+    { id: "support" as const, label: isEn ? "Help" : "Hjelp", icon: Headphones },
+    ...(adminMenuItem ? [adminMenuItem] : []),
+  ]
 
-  const menuItems = currentMode === "provider" ? providerMenuItems : customerMenuItems
+  const customerMenuItemsWithAdmin = customerMenuItems
+
+  const menuItems =
+    currentMode === "provider" ? providerMenuItems : customerMenuItemsWithAdmin
 
   if (!isOpen) return null
 
@@ -480,8 +504,12 @@ export default function HamburgerMenu({
             <div className="flex-1">
               <p className="font-semibold">{userName}</p>
               <div className="flex items-center gap-1">
-                <Star className="h-3 w-3 fill-primary text-primary" />
-                <span className="text-sm text-muted-foreground">{userRating}</span>
+                {currentMode === "provider" ? (
+                  <>
+                    <Star className="h-3 w-3 fill-primary text-primary" />
+                    <span className="text-sm text-muted-foreground">{userRating}</span>
+                  </>
+                ) : null}
               </div>
             </div>
             <ChevronRight className="h-5 w-5 text-muted-foreground" />
@@ -584,46 +612,64 @@ export default function HamburgerMenu({
 
         {/* Bottom */}
         <div className="p-5 border-t border-border space-y-3">
-          {/* Mode Switch Toggle */}
-          <div className="flex items-center justify-between p-3 rounded-xl bg-muted/50">
-            <span className="text-sm font-medium text-muted-foreground">
-              {isEn ? "Mode" : "Modus"}
-            </span>
-            <div className="bg-muted rounded-full p-1 flex">
-              <button
-                type="button"
-                disabled={modeSwitching}
-                onClick={() =>
-                  !modeSwitching &&
-                  currentMode !== "customer" &&
-                  onModeChange("customer")
-                }
-                className={cn(
-                  "px-3 py-1.5 rounded-full text-xs font-medium transition-all",
-                  currentMode === "customer" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground",
-                  modeSwitching && "opacity-60 cursor-not-allowed"
-                )}
-              >
-                {isEn ? "Customer" : "Kunde"}
-              </button>
-              <button
-                type="button"
-                disabled={modeSwitching}
-                onClick={() =>
-                  !modeSwitching &&
-                  currentMode !== "provider" &&
-                  onModeChange("provider")
-                }
-                className={cn(
-                  "px-3 py-1.5 rounded-full text-xs font-medium transition-all",
-                  currentMode === "provider" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground",
-                  modeSwitching && "opacity-60 cursor-not-allowed"
-                )}
-              >
-                {isEn ? "Provider" : "Tilbyder"}
-              </button>
+          {canSwitchModes ? (
+            <div className="flex items-center justify-between p-3 rounded-xl bg-muted/50">
+              <span className="text-sm font-medium text-muted-foreground">
+                {isEn ? "Mode" : "Modus"}
+              </span>
+              <div className="bg-muted rounded-full p-1 flex">
+                <button
+                  type="button"
+                  onClick={() => currentMode !== "customer" && onModeChange("customer")}
+                  className={cn(
+                    "px-3 py-1.5 rounded-full text-xs font-medium transition-all",
+                    currentMode === "customer" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"
+                  )}
+                >
+                  {isEn ? "Customer" : "Kunde"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => currentMode !== "provider" && onModeChange("provider")}
+                  className={cn(
+                    "px-3 py-1.5 rounded-full text-xs font-medium transition-all",
+                    currentMode === "provider" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"
+                  )}
+                >
+                  {isEn ? "Provider" : "Tilbyder"}
+                </button>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="space-y-2">
+              {!hasProviderRole && onBecomeProvider ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onBecomeProvider()
+                    onClose()
+                  }}
+                  className="w-full flex items-center justify-center gap-2 p-3 rounded-xl bg-muted/50 hover:bg-muted text-sm font-medium"
+                >
+                  <Briefcase className="h-4 w-4" />
+                  {isEn ? "Become a provider" : "Bli tilbyder"}
+                </button>
+              ) : null}
+              {!hasCustomerRole && onBookAService ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onBookAService()
+                    onClose()
+                  }}
+                  className="w-full flex items-center justify-center gap-2 p-3 rounded-xl bg-muted/50 hover:bg-muted text-sm font-medium"
+                >
+                  <Calendar className="h-4 w-4" />
+                  {isEn ? "Book a service" : "Bestill en tjeneste"}
+                </button>
+              ) : null}
+            </div>
+          )}
 
           {/* Language */}
           {onLanguageChange && (

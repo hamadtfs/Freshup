@@ -1,6 +1,13 @@
 import { DELIVERY_FEE_BASE, DELIVERY_FEE_PER_KM } from "./constants";
 
-/** Display-only: 10 NOK ≈ $1 in English UI. Stripe still charges NOK. */
+/**
+ * Display currency follows the GPS/pricing area (spec), not UI language.
+ * All live markets are Norway → NOK. Language only affects copy, never $ conversion.
+ * Stripe and provider_price_inputs remain NOK.
+ */
+export type DisplayCurrency = "NOK";
+
+/** @deprecated Kept so callers compiling against the old USD display helpers still typecheck. */
 export const NOK_PER_DISPLAY_USD = 10;
 
 export type DisplayLanguage = "en" | "no";
@@ -12,6 +19,7 @@ export function roundDisplayKr(amount: number): number {
   return Math.round(value);
 }
 
+/** @deprecated Do not use for UI — was language-tied and corrupted signup amounts. */
 export function roundDisplayUsdFromKr(amountKr: number): number {
   return Math.round(roundDisplayKr(amountKr) / NOK_PER_DISPLAY_USD);
 }
@@ -20,23 +28,29 @@ export function formatDisplayKr(amount: number): string {
   return `${roundDisplayKr(amount)} kr`;
 }
 
+/** @deprecated Prefer formatDisplayKr / formatDisplayPrice. */
 export function formatDisplayUsdFromKr(amountKr: number): string {
-  return `$${roundDisplayUsdFromKr(amountKr)}`;
+  return formatDisplayKr(amountKr);
 }
 
+/**
+ * Format a NOK amount for UI. `language` is ignored for currency (area = NOK).
+ * Kept in the signature so existing call sites need no churn.
+ */
 export function formatDisplayPrice(
   amountKr: number,
-  language: DisplayLanguage = "no",
+  _language: DisplayLanguage = "no",
+  currency: DisplayCurrency = "NOK",
 ): string {
-  return language === "en"
-    ? formatDisplayUsdFromKr(amountKr)
-    : formatDisplayKr(amountKr);
+  void _language;
+  void currency;
+  return formatDisplayKr(amountKr);
 }
 
-/** Home-delivery rate label for booking UI. */
-export function formatDeliveryRateLabel(language: DisplayLanguage = "no"): string {
-  if (language === "en") {
-    return `$${roundDisplayUsdFromKr(DELIVERY_FEE_BASE)} + $${roundDisplayUsdFromKr(DELIVERY_FEE_PER_KM)}/km`;
-  }
+/** Home-delivery rate label — always NOK for current markets. */
+export function formatDeliveryRateLabel(
+  _language: DisplayLanguage = "no",
+): string {
+  void _language;
   return `${DELIVERY_FEE_BASE} kr + ${DELIVERY_FEE_PER_KM} kr/km`;
 }

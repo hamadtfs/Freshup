@@ -6,23 +6,28 @@ import { Button } from "@/components/ui/button";
 import { ChevronLeft, ChevronDown, Star, Scissors } from "lucide-react";
 import { SERVICE_ID_ALIASES } from "@/lib/service-id";
 import { formatDisplayPrice } from "@/lib/pricing/format-display-kr";
+import { snapPriceKr, snapPriceRangeKr } from "@/lib/pricing/snap-kr";
 type AppMode = "beauty" | "vehicle" | "pet" | "home_service" | "health";
 
 function dashboardDeliveryModeKey(providerId: string): string {
   return `freshup.deliveryMode.${providerId}`;
 }
 
-/** Preserve dashboard Delivery / At provider toggle when saving skills. */
+/** Preserve dashboard Delivery / At provider UI toggle preference without
+ * wiping the other mode — providers should stay matchable for both job types. */
 function resolveDeliveryModesForSkillsSave(
   providerId: string,
   selectedMode: AppMode,
 ): string[] {
   if (typeof window !== "undefined" && providerId) {
     const saved = localStorage.getItem(dashboardDeliveryModeKey(providerId));
-    if (saved === "home") return ["home"];
-    if (saved === "provider") return ["at_provider"];
+    if (saved === "home" || saved === "provider") {
+      return ["home", "at_provider"];
+    }
   }
-  return selectedMode === "home_service" ? ["home"] : ["at_provider"];
+  return selectedMode === "home_service"
+    ? ["home", "at_provider"]
+    : ["at_provider", "home"];
 }
 
 // ── Same data structures as login-page & page.tsx ─────────────────────────────
@@ -978,7 +983,10 @@ function catalogPriceAnchorKr(durationMinutes: number): number {
   return Math.max(150, Math.round((durationMinutes || 30) * 12));
 }
 
-function findServiceDurationMinutes(mode: AppMode, serviceId: string): number {
+function findServiceDurationMinutes(
+  mode: AppMode,
+  serviceId: string,
+): number {
   const variants = new Set(serviceIdVariantsForSkills(serviceId));
   const targets = MODE_SERVICES[mode] || {};
   for (const categories of Object.values(targets)) {
@@ -1606,9 +1614,7 @@ export default function SkillsPage({
           }
           for (const serviceId of selectedServices) {
             const variants = serviceIdVariantsForSkills(serviceId);
-            const hasPrice = variants.some(
-              (v) => next[v] != null && next[v] > 0,
-            );
+            const hasPrice = variants.some((v) => next[v] != null && next[v] > 0);
             if (hasPrice) continue;
             const anchor = catalogPriceAnchorKr(
               findServiceDurationMinutes(selectedMode, serviceId),
@@ -1625,9 +1631,7 @@ export default function SkillsPage({
           }
           for (const serviceId of selectedServices) {
             const variants = serviceIdVariantsForSkills(serviceId);
-            const hasAnchor = variants.some(
-              (v) => next[v] != null && next[v] > 0,
-            );
+            const hasAnchor = variants.some((v) => next[v] != null && next[v] > 0);
             if (hasAnchor) continue;
             const anchor = catalogPriceAnchorKr(
               findServiceDurationMinutes(selectedMode, serviceId),
@@ -1735,8 +1739,7 @@ export default function SkillsPage({
       const priceSubmissions = selectedServices
         .map((serviceId) => {
           const price = servicePrices[serviceId];
-          if (price == null || !Number.isFinite(price) || price <= 0)
-            return null;
+          if (price == null || !Number.isFinite(price) || price <= 0) return null;
           return { serviceId, price };
         })
         .filter(
@@ -1840,7 +1843,7 @@ export default function SkillsPage({
     selectedServices.length > 0 && selectedMode === mode;
 
   return (
-    <main className="mx-auto h-[100dvh] w-full max-w-md bg-transparent to-slate-100 flex flex-col overflow-hidden">
+    <main className="mx-auto h-[100dvh] w-full max-w-md bg-[#F7FAF2] flex flex-col overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-4 pt-14 pb-3">
         <button
@@ -2073,7 +2076,7 @@ export default function SkillsPage({
                     </div>
 
                     {/* Service cards */}
-                    <div className="space-y-2">
+                    <div className="space-y-3 py-1">
                       {catServices.map((service) => {
                         const serviceVariants = serviceIdVariantsForSkills(
                           service.id,
@@ -2097,15 +2100,17 @@ export default function SkillsPage({
                         return (
                           <div
                             key={service.id}
-                            className="glass-morphism-strong rounded-2xl overflow-hidden border-0 shadow-sm"
+                            className="rounded-2xl bg-white shadow-[0_6px_20px_rgba(15,23,42,0.14)] ring-0"
+                            style={{ boxShadow: "0 6px 20px rgba(15,23,42,0.14)" }}
                           >
+                            <div className="overflow-hidden rounded-2xl">
                             <button
-                              className="w-full p-4 text-left transition-all duration-300 hover:bg-white/10"
+                              className="w-full p-4 text-left transition-all duration-300 hover:bg-black/[0.02]"
                               onClick={() => toggleService(service.id)}
                             >
                               <div className="flex items-center gap-3">
                                 {/* Service icon */}
-                                <div className="w-10 h-10 glass-morphism rounded-xl flex items-center justify-center border-0 flex-shrink-0">
+                                <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-[#F3F4F2] border-none flex-shrink-0">
                                   <CategoryIcon
                                     mode={selectedMode}
                                     category={catId}
@@ -2211,14 +2216,16 @@ export default function SkillsPage({
                                         servicePriceAnchors[priceKey] ??
                                         servicePriceAnchors[service.id] ??
                                         catalogPriceAnchorKr(service.duration);
-                                      const priceMin = Math.round(
-                                        anchorKr * 0.5,
-                                      );
-                                      const priceMax = Math.round(anchorKr * 2);
-                                      const currentPriceKr =
+                                      const { min: priceMin, max: priceMax } =
+                                        snapPriceRangeKr(
+                                          anchorKr * 0.5,
+                                          anchorKr * 2,
+                                        );
+                                      const currentPriceKr = snapPriceKr(
                                         servicePrices[priceKey] ??
-                                        servicePrices[service.id] ??
-                                        anchorKr;
+                                          servicePrices[service.id] ??
+                                          anchorKr,
+                                      );
                                       return (
                                         <>
                                           <div className="flex items-center gap-2">
@@ -2226,11 +2233,20 @@ export default function SkillsPage({
                                               type="range"
                                               min={priceMin}
                                               max={priceMax}
-                                              value={currentPriceKr}
+                                              step={25}
+                                              value={Math.min(
+                                                priceMax,
+                                                Math.max(
+                                                  priceMin,
+                                                  currentPriceKr,
+                                                ),
+                                              )}
                                               onChange={(e) =>
                                                 setPriceKr(
                                                   priceKey,
-                                                  parseInt(e.target.value, 10),
+                                                  snapPriceKr(
+                                                    parseInt(e.target.value, 10),
+                                                  ),
                                                 )
                                               }
                                               onClick={(e) =>
@@ -2271,6 +2287,7 @@ export default function SkillsPage({
                                 </div>
                               </div>
                             )}
+                            </div>
                           </div>
                         );
                       })}

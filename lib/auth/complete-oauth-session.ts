@@ -4,7 +4,6 @@ import type { OAuthPendingPayload } from "@/lib/auth/oauth-pending"
 import { persistProviderOnboardingForUser } from "@/lib/auth/provider-onboarding"
 import {
   formatSignupPriceFailureMessage,
-  resolveSignupPriceCoords,
   saveProviderSignupCoords,
   submitSignupBasePrices,
 } from "@/lib/pricing/submit-signup-base-prices"
@@ -14,7 +13,13 @@ export async function completeOAuthSession(
   userId: string,
   pending: OAuthPendingPayload | null,
 ): Promise<void> {
-  const role = pending?.role ?? "customer"
+  // Prefer pending signup intent; otherwise keep existing metadata (do not
+  // invent "customer" when a returning provider has no pending payload).
+  const { data: userData } = await supabase.auth.getUser()
+  const metaRole = userData.user?.user_metadata?.app_role
+  const role =
+    pending?.role ??
+    (metaRole === "provider" || metaRole === "customer" ? metaRole : "customer")
   writeStoredDashboardMode(userId, role)
 
   await supabase.auth.updateUser({
@@ -23,6 +28,15 @@ export async function completeOAuthSession(
 
   if (role === "provider" && pending?.providerOnboarding) {
     const onboarding = pending.providerOnboarding
+    if (
+      !onboarding.signupCoords ||
+      !Number.isFinite(onboarding.signupCoords.lat) ||
+      !Number.isFinite(onboarding.signupCoords.lng)
+    ) {
+      throw new Error(
+        "Location is required to finish provider signup. Enable GPS and try again.",
+      )
+    }
     await persistProviderOnboardingForUser(supabase, userId, onboarding)
 
     const serviceIds = onboarding.mode_selections.flatMap((ms) =>
@@ -35,18 +49,12 @@ export async function completeOAuthSession(
     })
 
     if (hasPrices) {
-      const coords = await resolveSignupPriceCoords(
-        userId,
-        onboarding.signupCoords ?? null,
-      )
-      if (coords) {
-        await saveProviderSignupCoords(userId, coords)
-      }
+      await saveProviderSignupCoords(userId, onboarding.signupCoords)
       const failures = await submitSignupBasePrices({
         providerId: userId,
         servicePrices,
         serviceIds,
-        coords,
+        coords: onboarding.signupCoords,
       })
       if (failures.length > 0) {
         throw new Error(formatSignupPriceFailureMessage(failures, true))

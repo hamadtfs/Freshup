@@ -12,6 +12,7 @@ interface CustomerProfileUpdatePayload {
   defaultLat?: number
   defaultLng?: number
   defaultAddress?: string
+  notificationOptIn?: boolean
 }
 
 function normalizeString(value: unknown): string | null {
@@ -60,6 +61,9 @@ export async function GET(req: NextRequest) {
     if (error) throw error
 
     const location = readProfileLocation(profile as Record<string, unknown> | null)
+    const notificationOptIn =
+      (profile as { notification_opt_in?: boolean } | null)?.notification_opt_in !==
+      false
 
     return NextResponse.json({
       profile: profile || null,
@@ -73,6 +77,7 @@ export async function GET(req: NextRequest) {
         lng: location.lng,
       },
       defaultLocation: location,
+      notificationOptIn,
     })
   } catch (error) {
     console.error("[v0] Get customer error:", error)
@@ -90,9 +95,48 @@ export async function PUT(req: NextRequest) {
     const updates = (await req.json()) as CustomerProfileUpdatePayload
     const raw = updates as Record<string, unknown>
 
+    // Lean path: notification toggle only.
+    const payloadKeys = Object.keys(raw).filter((k) => raw[k] !== undefined)
+    if (
+      payloadKeys.length === 1 &&
+      payloadKeys[0] === "notificationOptIn"
+    ) {
+      const notificationOptIn = Boolean(raw.notificationOptIn)
+      const now = new Date().toISOString()
+      const { data: existingProfile, error: profileReadErr } = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("id", userId)
+        .maybeSingle()
+      if (profileReadErr) throw profileReadErr
+      if (existingProfile?.id) {
+        const { error: optInErr } = await supabase
+          .from("profiles")
+          .update({
+            notification_opt_in: notificationOptIn,
+            updated_at: now,
+          })
+          .eq("id", userId)
+        if (optInErr) throw optInErr
+      } else {
+        const { error: optInErr } = await supabase.from("profiles").insert({
+          id: userId,
+          notification_opt_in: notificationOptIn,
+          updated_at: now,
+        })
+        if (optInErr) throw optInErr
+      }
+      return NextResponse.json({
+        success: true,
+        notificationOptIn,
+      })
+    }
+
     const { data: existing, error: existingErr } = await supabase
       .from("profiles")
-      .select("display_name, phone, email, avatar_url, default_location_label, lat, lng")
+      .select(
+        "display_name, phone, email, avatar_url, default_location_label, lat, lng, notification_opt_in",
+      )
       .eq("id", userId)
       .maybeSingle()
     if (existingErr) throw existingErr
@@ -152,22 +196,61 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "Invalid email address" }, { status: 400 })
     }
 
+    const notificationOptIn = Object.prototype.hasOwnProperty.call(
+      raw,
+      "notificationOptIn",
+    )
+      ? Boolean(updates.notificationOptIn)
+      : (existing as { notification_opt_in?: boolean } | null)
+          ?.notification_opt_in !== false
+
     const now = new Date().toISOString()
-    const { error: profileErr } = await supabase.from("profiles").upsert(
+    const baseProfile = {
+      id: userId,
+      display_name: name,
+      email,
+      phone,
+      avatar_url: avatarUrl,
+      default_location_label: address || null,
+      lat,
+      lng,
+      notification_opt_in: notificationOptIn,
+      updated_at: now,
+    }
+    let { error: profileErr } = await supabase.from("profiles").upsert(
       {
-        id: userId,
-        display_name: name,
-        email,
-        phone,
-        avatar_url: avatarUrl,
-        default_location_label: address || null,
-        lat,
-        lng,
-        updated_at: now,
+        ...baseProfile,
+        default_address: address || null,
+        default_lat: lat,
+        default_lng: lng,
       },
       { onConflict: "id" },
     )
+    if (
+      profileErr &&
+      /default_(lat|lng|address)/i.test(profileErr.message || "")
+    ) {
+      ;({ error: profileErr } = await supabase
+        .from("profiles")
+        .upsert(baseProfile, { onConflict: "id" }))
+    }
     if (profileErr) throw profileErr
+
+    // Ensure customer_details row exists for booking FKs.
+    try {
+      await supabase.from("customer_details").upsert(
+        { id: userId },
+        { onConflict: "id" },
+      )
+      await supabase.rpc("upsert_account_role_grant", {
+        p_user_id: userId,
+        p_role: "customer",
+        p_status: "active",
+        p_activate: true,
+      })
+    } catch (e) {
+      console.warn("[customers/me] ensure customer role", e)
+    }
 
     const location = {
       address: address || "",
@@ -185,6 +268,7 @@ export async function PUT(req: NextRequest) {
         ...location,
       },
       defaultLocation: location,
+      notificationOptIn,
     })
   } catch (error) {
     console.error("[v0] Update customer error:", error)

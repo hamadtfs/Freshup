@@ -14,7 +14,10 @@ const SPEC_PROVIDER_BASE = 300;
 describe("FreshUp Pricing & Tier System v1.0 — §2.3 dynamic multiplier", () => {
   it("computes used_capacity as (active / online) × 100", () => {
     expect(computeUsedCapacity(7, 10)).toBe(70);
-    expect(computeUsedCapacity(3, 0)).toBe(0);
+    // Bookings with zero live providers = saturated, not quiet.
+    expect(computeUsedCapacity(3, 0)).toBe(300);
+    // No bookings and no providers = 0% (closed market UI handles this separately).
+    expect(computeUsedCapacity(0, 0)).toBe(0);
   });
 
   it.each([
@@ -44,6 +47,24 @@ describe("FreshUp Pricing & Tier System v1.0 — §2.3 dynamic multiplier", () =
   it("caps multiplier below 0 % and above 100 % capacity", () => {
     expect(computeDynamicMultiplier(-50)).toBe(-0.3);
     expect(computeDynamicMultiplier(200)).toBe(0.3);
+  });
+
+  it("closed market uses base price via multiplierOverride 0 even at 0% capacity", () => {
+    const quiet = computeQuote({
+      providerBasePrice: SPEC_PROVIDER_BASE,
+      usedCapacityPct: 0,
+      isHomeVisit: false,
+    });
+    expect(quiet.multiplier).toBeCloseTo(-0.3, 5);
+
+    const closed = computeQuote({
+      providerBasePrice: SPEC_PROVIDER_BASE,
+      usedCapacityPct: 0,
+      multiplierOverride: 0,
+      isHomeVisit: false,
+    });
+    expect(closed.multiplier).toBe(0);
+    expect(closed.customerServicePrice).toBe(375);
   });
 });
 

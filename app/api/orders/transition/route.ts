@@ -55,7 +55,7 @@ export async function POST(req: Request) {
 
     const { data: order, error: orderErr } = await supabase
       .from("orders")
-      .select("id, provider_id, status")
+      .select("id, provider_id, status, customer_id, delivery_mode")
       .eq("id", orderId)
       .maybeSingle();
     if (orderErr || !order) {
@@ -148,18 +148,18 @@ export async function POST(req: Request) {
     }
 
     try {
-      const { data: orderForPush } = await supabase
-        .from("orders")
-        .select("customer_id")
-        .eq("id", orderId)
-        .maybeSingle();
-      const customerId = orderForPush?.customer_id
-        ? String(orderForPush.customer_id)
-        : "";
+      const customerId = order.customer_id ? String(order.customer_id) : "";
       if (customerId) {
+        const deliveryMode = String(order.delivery_mode || "").toLowerCase();
+        const atProvider =
+          deliveryMode === "at_provider" || deliveryMode === "provider";
         const statusCopy: Record<ProviderTransitionStatus, string> = {
-          en_route: "Your provider is on the way.",
-          arrived: "Your provider has arrived.",
+          en_route: atProvider
+            ? "Head to the provider's location."
+            : "Your provider is on the way.",
+          arrived: atProvider
+            ? "You have arrived at the provider's location."
+            : "Your provider has arrived.",
           in_progress: "Your service has started.",
         };
         void import("@/lib/notifications/expo-push").then(({ notifyUsers }) =>

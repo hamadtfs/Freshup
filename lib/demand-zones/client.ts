@@ -163,6 +163,8 @@ export function demandTierDotClass(tier: DemandZoneTier): string {
       return "bg-green-500";
     case "red":
       return "bg-red-500";
+    case "closed":
+      return "bg-gray-400";
     default:
       return "bg-blue-500";
   }

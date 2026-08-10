@@ -25,6 +25,17 @@ export function customerUiStatusShowsProviderLiveLocation(
   return key === "enroute" || key === "in_service";
 }
 
+/**
+ * Customer UI status when the customer publishes GPS for the provider.
+ * Matches `shouldPublishCustomerLiveLocation` in the mobile app.
+ */
+export function customerUiStatusPublishesLiveLocation(
+  status: string,
+): boolean {
+  const key = String(status || "").toLowerCase();
+  return key === "enroute" || key === "in_service";
+}
+
 /** Provider in-app job step when GPS should be published. */
 export function providerJobStepPublishesLiveLocation(step: string): boolean {
   const key = String(step || "").toLowerCase();

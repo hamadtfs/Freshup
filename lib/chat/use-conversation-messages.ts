@@ -5,6 +5,12 @@ import { createBrowserSupabaseClient } from "@/lib/supabase/client"
 import type { ChatUiMessage } from "@/lib/chat/message"
 import { listChatMessages, sendChatMessage } from "@/lib/chat/client"
 import { playIncomingMessageBell } from "@/lib/chat/notification-sound"
+import {
+  createAdaptivePoll,
+  isRealtimeDownStatus,
+  REALTIME_CHAT_SAFETY_POLL_MS,
+  type AdaptivePoll,
+} from "@/lib/realtime/adaptive-poll"
 
 const POLL_MS = 2500
 const OPTIMISTIC_PREFIX = "opt-"
@@ -194,7 +200,7 @@ export function useConversationMessages({
 
     let cancelled = false
     let channel: { unsubscribe?: () => void } | null = null
-    let pollTimer: ReturnType<typeof setInterval> | null = null
+    let poll: AdaptivePoll | null = null
     const supabase = createBrowserSupabaseClient() as any
 
     async function boot() {
@@ -254,6 +260,15 @@ export function useConversationMessages({
           void supabase.realtime.setAuth(auth.token)
         }
 
+        // Prefer realtime; start on the slow cadence so open chat does not
+        // hammer /api/chat/messages before SUBSCRIBED arrives.
+        poll = createAdaptivePoll({
+          run: () => void refresh(),
+          fallbackMs: POLL_MS,
+          connectedMs: REALTIME_CHAT_SAFETY_POLL_MS,
+          assumeConnected: true,
+        })
+
         if (typeof supabase.channel === "function") {
           channel = supabase
             .channel(`${channelPrefix}:${conversationId}`)
@@ -293,12 +308,14 @@ export function useConversationMessages({
                 })
               },
             )
-            .subscribe()
+            .subscribe((channelStatus: string) => {
+              if (channelStatus === "SUBSCRIBED") {
+                poll?.setRealtimeConnected(true)
+              } else if (isRealtimeDownStatus(channelStatus)) {
+                poll?.setRealtimeConnected(false)
+              }
+            })
         }
-
-        pollTimer = setInterval(() => {
-          void refresh()
-        }, POLL_MS)
       } catch {
         if (!cancelled) setError("Failed to load messages")
       } finally {
@@ -309,7 +326,7 @@ export function useConversationMessages({
     void boot()
     return () => {
       cancelled = true
-      if (pollTimer) clearInterval(pollTimer)
+      poll?.stop()
       if (channel) {
         if (typeof supabase.removeChannel === "function") {
           void supabase.removeChannel(channel)

@@ -329,6 +329,9 @@ export async function dispatchTick(
             max_distance_km: batch.max_distance_km,
             min_rating: batch.min_rating,
             performance_tier: perfTier,
+            customer_id: (order as any)?.customer_id
+              ? String((order as any).customer_id)
+              : null,
           });
         if (matchRpcErr) {
           results.push({

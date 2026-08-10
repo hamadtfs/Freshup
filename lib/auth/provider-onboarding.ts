@@ -4,7 +4,11 @@ export type ProviderModeSelection = {
   mode_id: string
   targets: string[]
   categories: string[]
-  services: Array<{ service_id: string; competence_rating: number }>
+  services: Array<{
+    service_id: string
+    competence_rating: number
+    service_mode_id?: "home" | "provider" | "both"
+  }>
 }
 
 export type ProviderOnboardingInput = {
@@ -44,6 +48,9 @@ export async function persistProviderOnboardingForUser(
       body: JSON.stringify({
         delivery_modes,
         mode_selections,
+        ...(input.signupCoords
+          ? { lat: input.signupCoords.lat, lng: input.signupCoords.lng }
+          : {}),
       }),
     })
     const onboardJson = (await onboardRes.json().catch(() => ({}))) as {

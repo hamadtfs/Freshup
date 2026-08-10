@@ -12,11 +12,13 @@
 //   service_ids was supplied) — even when the per-service base price
 //   isn't computed yet, the response includes a `fallback` flag so
 //   callers can fall back to legacy `services.base_price_*` averages.
+// • market_closed is evaluated per service within the 10 km match radius.
 // =====================================================================
 
 import { createAdminClient } from "@/lib/supabase/server";
 import { isTransientUpstreamError, withTransientRetry } from "@/lib/supabase/transient";
 import { resolveAreaIdFromDb, buildQuote } from "@/lib/pricing/server";
+import { countOnlineProvidersNearbyForServices } from "@/lib/pricing/nearby-online-providers";
 import { DEFAULT_CURRENCY } from "@/lib/pricing";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -41,6 +43,9 @@ interface BulkQuoteEntry {
   currency: string;
   /** Legacy fallback (`services.base_price_*` average) when no computed quote is available. */
   legacy_base_price: number | null;
+  /** No live providers for this service within 10 km of the customer. */
+  market_closed: boolean;
+  online_providers_nearby: number;
 }
 
 export async function GET(req: NextRequest) {
@@ -51,6 +56,11 @@ export async function GET(req: NextRequest) {
     const deliveryModeRaw = params.get("delivery_mode");
     const deliveryMode: "home" | "provider" =
       deliveryModeRaw === "home" ? "home" : "provider";
+    // Card prices often use delivery_mode=provider (no fee); online_mode drives
+    // market_closed against providers capable of the customer's selected mode.
+    const onlineModeRaw = params.get("online_mode") || deliveryModeRaw;
+    const onlineMode: "home" | "provider" =
+      onlineModeRaw === "home" ? "home" : "provider";
 
     const explicitIds = (params.get("service_ids") ?? "")
       .split(",")
@@ -91,10 +101,28 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const items: BulkQuoteEntry[] = [];
     const serviceRows = services ?? [];
+    const serviceIds = serviceRows.map((s: { id: string }) => String(s.id));
+
+    const nearbyByService =
+      lat != null && lng != null
+        ? await countOnlineProvidersNearbyForServices(
+            supabase,
+            serviceIds,
+            lat,
+            lng,
+            undefined,
+            onlineMode,
+          )
+        : new Map();
+
+    const items: BulkQuoteEntry[] = [];
     let nextIndex = 0;
-    const quoteService = async (svc: any) => {
+    const quoteService = async (svc: {
+      id: string;
+      base_price_min?: number | null;
+      base_price_max?: number | null;
+    }) => {
       const serviceId = String(svc.id);
       const baseMin = Number(svc.base_price_min);
       const baseMax = Number(svc.base_price_max);
@@ -106,6 +134,10 @@ export async function GET(req: NextRequest) {
       } else if (Number.isFinite(baseMax) && baseMax > 0) {
         legacyBase = baseMax;
       }
+
+      const nearby = nearbyByService.get(serviceId);
+      const marketClosed = nearby?.marketClosed ?? false;
+      const onlineNearby = nearby?.count ?? 0;
 
       let entry: BulkQuoteEntry = {
         service_id: serviceId,
@@ -119,20 +151,21 @@ export async function GET(req: NextRequest) {
         is_active: false,
         currency: DEFAULT_CURRENCY,
         legacy_base_price: legacyBase,
+        market_closed: marketClosed,
+        online_providers_nearby: onlineNearby,
       };
 
       try {
         const quote = await buildQuote(supabase, {
           serviceId,
-          // Bulk list pricing prioritizes fast response over per-grid freshness.
-          // We already resolve `areaId` once above, so skip point-level
-          // capacity recomputation here and use area-level capacity.
-          customerLat: null,
-          customerLng: null,
+          customerLat: lat,
+          customerLng: lng,
           deliveryMode,
           addonIds: [],
           areaId,
           preferLiveCapacity: false,
+          marketClosed,
+          onlineProvidersNearby: onlineNearby,
         });
         if (quote) {
           entry = {
@@ -145,6 +178,8 @@ export async function GET(req: NextRequest) {
             used_capacity_pct: quote.usedCapacityPct,
             base_price_source: quote.basePriceSource,
             is_active: quote.basePriceIsActive,
+            market_closed: quote.marketClosed,
+            online_providers_nearby: quote.onlineProvidersNearby,
           };
         }
       } catch (e) {

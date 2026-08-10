@@ -22,6 +22,7 @@ import {
   PawPrint,
   Home,
   Heart,
+  Loader2,
 } from "lucide-react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { normalizeToE164 } from "@/lib/auth/phone";
@@ -31,7 +32,18 @@ import {
   type OAuthProvider,
 } from "@/lib/auth/oauth-client";
 import { saveOAuthPending } from "@/lib/auth/oauth-pending";
+import {
+  beginProviderSignupInProgress,
+  clearProviderSignupInProgress,
+  isProviderSignupInProgress,
+  peekProviderSignupResumeStep,
+  setProviderSignupResumeStep,
+} from "@/lib/auth/provider-signup-gate";
 import { writeStoredDashboardMode } from "@/lib/auth/dashboard-mode";
+import {
+  snapPriceKr,
+  snapPriceRangeKr,
+} from "@/lib/pricing/snap-kr";
 import {
   persistProviderOnboardingForUser,
   type ProviderOnboardingInput,
@@ -39,11 +51,13 @@ import {
 import {
   formatSignupPriceFailureMessage,
   readDeviceLocation,
-  resolveSignupPriceCoords,
   saveProviderSignupCoords,
   submitSignupBasePrices,
 } from "@/lib/pricing/submit-signup-base-prices";
-import { formatDisplayPrice } from "@/lib/pricing/format-display-kr";
+import { formatDisplayPrice, formatDeliveryRateLabel } from "@/lib/pricing/format-display-kr";
+import {
+  stripeConnectStartUserMessage,
+} from "@/lib/payments/stripe-connect-errors";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type Language = "no" | "en";
@@ -53,6 +67,8 @@ type AppMode = "beauty" | "vehicle" | "pet" | "home_service" | "health";
 interface LoginPageProps {
   onLogin: (userType: UserType) => void;
   onSkip?: (userType?: UserType) => void;
+  /** Parent keeps LoginPage mounted while OTP/OAuth creates a session mid-signup. */
+  onProviderSignupGateChange?: (active: boolean) => void;
   language?: Language;
   onLanguageChange?: (lang: Language) => void;
 }
@@ -1301,6 +1317,7 @@ function CategoryIcon({
 export default function LoginPage({
   onLogin,
   onSkip,
+  onProviderSignupGateChange,
   language = "no",
   onLanguageChange,
 }: LoginPageProps) {
@@ -1319,9 +1336,8 @@ export default function LoginPage({
   const [otp, setOtp] = useState("");
   const [showOtp, setShowOtp] = useState(false);
   const [profileName, setProfileName] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState<"vipps" | "bank" | null>(
-    null,
-  );
+  const [paymentMethod, setPaymentMethod] = useState<"stripe" | null>(null);
+  const [stripeConnectBusy, setStripeConnectBusy] = useState(false);
 
   // Provider signup
   const [appMode, setAppMode] = useState<AppMode>("beauty");
@@ -1337,7 +1353,8 @@ export default function LoginPage({
       {
         rating: number;
         price: number;
-        canDeliver: boolean;
+        /** Per-service: home | provider (customer comes to me) | both */
+        serviceMode: "home" | "provider" | "both";
         mode: AppMode;
         target: string;
         category: string;
@@ -1348,11 +1365,12 @@ export default function LoginPage({
   >({});
   const [step, setStep] = useState<"services" | "summary" | "auth">("services");
   const [providerAuthStep, setProviderAuthStep] = useState<
-    "profile" | "payment" | "phone" | "otp"
-  >("profile");
+    "phone" | "otp" | "profile" | "payment"
+  >("phone");
   const [showModeDropdown, setShowModeDropdown] = useState(false);
   const [sendingOtp, setSendingOtp] = useState(false);
   const [verifyingOtp, setVerifyingOtp] = useState(false);
+  const [completingSignup, setCompletingSignup] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [devOtpFallback, setDevOtpFallback] = useState(false);
   const [oauthLoading, setOauthLoading] = useState<OAuthProvider | null>(null);
@@ -1364,17 +1382,155 @@ export default function LoginPage({
     lat: number;
     lng: number;
   } | null>(null);
+  const [locationStatus, setLocationStatus] = useState<
+    "idle" | "pending" | "ready" | "denied"
+  >("idle");
+
+  // Resume phone-first provider signup after OAuth return (or remount).
+  useEffect(() => {
+    if (!isProviderSignupInProgress()) return;
+    const resume = peekProviderSignupResumeStep() || "profile";
+    setView("provider");
+    if (resume === "services") {
+      setShowSummary(false);
+      setStep("services");
+      return;
+    }
+    setShowSummary(true);
+    setStep("auth");
+    setProviderAuthStep(resume === "otp" ? "profile" : resume);
+    onProviderSignupGateChange?.(true);
+
+    const params = new URLSearchParams(window.location.search);
+    const connectReturn =
+      params.get("provider_signup") === "connect_return" ||
+      params.get("provider_signup") === "connect_refresh";
+    if (connectReturn) {
+      window.history.replaceState({}, "", window.location.pathname || "/");
+      void (async () => {
+        try {
+          const { data } = await supabase.auth.getSession();
+          const token = data?.session?.access_token;
+          const uid = data?.session?.user?.id;
+          if (!token || !uid) return;
+          const res = await fetch(
+            "/api/providers/stripe-connect/status?refresh=1",
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "x-provider-id": uid,
+              },
+            },
+          );
+          const body = await res.json().catch(() => ({}));
+          if (
+            body?.stripe_payouts_enabled ||
+            body?.stripe_onboarded ||
+            body?.stripe_charges_enabled
+          ) {
+            setPaymentMethod("stripe");
+            setProviderSignupResumeStep("services");
+            setShowSummary(false);
+            setStep("services");
+          } else {
+            setProviderAuthStep("payment");
+          }
+        } catch {
+          setProviderAuthStep("payment");
+        }
+      })();
+    }
+  }, [onProviderSignupGateChange, supabase]);
+
+  const startSignupStripeConnect = async () => {
+    setAuthError(null);
+    setStripeConnectBusy(true);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data?.session?.access_token;
+      const uid = data?.session?.user?.id;
+      if (!token || !uid) {
+        setAuthError(
+          isEn
+            ? "Verify your phone before setting up payouts."
+            : "Bekreft telefonen før utbetalingsoppsett.",
+        );
+        return false;
+      }
+      beginProviderSignupInProgress("payment");
+      setProviderSignupResumeStep("payment");
+      onProviderSignupGateChange?.(true);
+      const origin = window.location.origin;
+      const res = await fetch("/api/providers/stripe-connect/start", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "x-provider-id": uid,
+        },
+        body: JSON.stringify({
+          return_url: `${origin}/?provider_signup=connect_return`,
+          refresh_url: `${origin}/?provider_signup=connect_refresh`,
+          business_name: profileName.trim() || undefined,
+          phone: normalizeToE164(phone) || undefined,
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body?.onboarding_url) {
+        const code = String(body?.error || body?.message || "CONNECT_START_FAILED");
+        setAuthError(stripeConnectStartUserMessage(code, isEn));
+        return false;
+      }
+      window.location.href = String(body.onboarding_url);
+      return true;
+    } catch (e) {
+      const code =
+        e instanceof Error ? e.message : "CONNECT_START_FAILED";
+      setAuthError(stripeConnectStartUserMessage(code, isEn));
+      return false;
+    } finally {
+      setStripeConnectBusy(false);
+    }
+  };
+
+  const skipStripeConnectForDev = () => {
+    setPaymentMethod("stripe");
+    setAuthError(null);
+    setProviderSignupResumeStep("services");
+    setShowSummary(false);
+    setStep("services");
+  };
 
   useEffect(() => {
     if (view !== "provider" || step !== "services") return;
     let cancelled = false;
+    setLocationStatus((prev) => (prev === "ready" ? prev : "pending"));
     void readDeviceLocation().then((coords) => {
-      if (!cancelled && coords) setSignupCoords(coords);
+      if (cancelled) return;
+      if (coords) {
+        setSignupCoords(coords);
+        setLocationStatus("ready");
+      } else {
+        setLocationStatus("denied");
+      }
     });
     return () => {
       cancelled = true;
     };
   }, [view, step]);
+
+  const retrySignupLocation = () => {
+    setLocationStatus("pending");
+    void readDeviceLocation().then((coords) => {
+      if (coords) {
+        setSignupCoords(coords);
+        setLocationStatus("ready");
+        setAuthError(null);
+      } else {
+        setLocationStatus("denied");
+      }
+    });
+  };
 
   const handleOtpChange = (index: number, e: ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value.replace(/\D/g, "");
@@ -1469,7 +1625,11 @@ export default function LoginPage({
       {
         targets: Set<string>;
         categories: Set<string>;
-        services: Array<{ service_id: string; competence_rating: number }>;
+        services: Array<{
+          service_id: string;
+          competence_rating: number;
+          service_mode_id: "home" | "provider" | "both";
+        }>;
       }
     >();
 
@@ -1491,6 +1651,7 @@ export default function LoginPage({
           1,
           Math.min(5, Number(service.rating) || 3),
         ),
+        service_mode_id: "both" as const,
       });
     });
 
@@ -1505,12 +1666,14 @@ export default function LoginPage({
 
     if (mode_selections.length === 0) return null;
 
-    const hasHomeDelivery = mode_selections.some(
-      (m) => m.mode_id === "home_service",
-    );
-    const delivery_modes: Array<"home" | "at_provider"> = hasHomeDelivery
-      ? ["home"]
-      : ["at_provider"];
+    // Signup no longer asks delivery; default both (per-service toggle lives on working cards).
+    const delivery_modes: Array<"home" | "at_provider"> = [
+      "home",
+      "at_provider",
+    ];
+    if (delivery_modes.length === 0) {
+      delivery_modes.push("at_provider");
+    }
     const primaryMode = mode_selections[0];
     const signupServicePrices = Object.fromEntries(
       Object.values(enabledServices).map((service) => [
@@ -1543,7 +1706,7 @@ export default function LoginPage({
             Math.max(1, Math.min(5, Number(service.rating) || 3)),
           ]),
         ),
-        deliveryMode: hasHomeDelivery ? "home" : "provider",
+        deliveryMode: "home",
         savedAt: Date.now(),
       },
     };
@@ -1556,11 +1719,30 @@ export default function LoginPage({
     const providerId = sessionData?.session?.user?.id;
     if (!providerId) return;
 
+    let coords = signupCoords;
+    if (!coords) {
+      coords = await readDeviceLocation();
+      if (coords) setSignupCoords(coords);
+    }
+    if (
+      !coords ||
+      !Number.isFinite(coords.lat) ||
+      !Number.isFinite(coords.lng)
+    ) {
+      throw new Error(
+        isEn
+          ? "Location is required to finish signup. Enable GPS and try again."
+          : "Posisjon er påkrevd for å fullføre. Slå på GPS og prøv igjen.",
+      );
+    }
+
     const input = buildProviderOnboardingInput();
     if (!input) return;
+    input.signupCoords = coords;
 
     await persistProviderOnboardingForUser(supabase, providerId, input);
     writeStoredDashboardMode(providerId, "provider");
+    await saveProviderSignupCoords(providerId, coords);
 
     const serviceIds = input.mode_selections.flatMap((ms) =>
       (ms.services || []).map((s) => s.service_id),
@@ -1570,11 +1752,6 @@ export default function LoginPage({
       (service) => service.price > 0,
     );
     if (!hasPrices) return;
-
-    const coords = await resolveSignupPriceCoords(providerId, signupCoords);
-    if (coords) {
-      await saveProviderSignupCoords(providerId, coords);
-    }
 
     const failures = await submitSignupBasePrices({
       providerId,
@@ -1685,16 +1862,20 @@ export default function LoginPage({
     setOauthLoading(provider);
     try {
       const role = resolveLoginRole();
-      const pending = {
-        role,
-        ...(role === "provider" && view === "provider"
-          ? (() => {
-              const providerOnboarding = buildProviderOnboardingInput();
-              return providerOnboarding ? { providerOnboarding } : {};
-            })()
-          : {}),
-      };
-      saveOAuthPending(pending);
+      if (role === "provider" && view === "provider") {
+        beginProviderSignupInProgress("profile");
+        setProviderSignupResumeStep("profile");
+        onProviderSignupGateChange?.(true);
+        const providerOnboarding = buildProviderOnboardingInput();
+        saveOAuthPending({
+          role: "provider",
+          ...(providerOnboarding
+            ? { providerOnboarding }
+            : { providerSignupContinue: true }),
+        });
+      } else {
+        saveOAuthPending({ role });
+      }
       const { error } = await signInWithOAuthProvider(supabase, provider);
       if (error) {
         setAuthError(error);
@@ -1819,19 +2000,9 @@ export default function LoginPage({
         );
         return false;
       }
-      try {
-        await persistProviderOnboarding();
-      } catch (e) {
-        const message =
-          e instanceof Error
-            ? e.message
-            : isEn
-              ? "Could not save onboarding data."
-              : "Kunne ikke lagre onboarding-data.";
-        setAuthError(message);
-        return false;
-      }
-      onLogin(role);
+      // Phone verified first — collect profile/payment before durable onboard.
+      setProviderAuthStep("profile");
+      setProviderSignupResumeStep("profile");
       return true;
     }
 
@@ -1849,23 +2020,55 @@ export default function LoginPage({
         );
         return false;
       }
-      try {
-        await persistProviderOnboarding();
-      } catch (e) {
-        const message =
-          e instanceof Error
-            ? e.message
-            : isEn
-              ? "Could not save onboarding data."
-              : "Kunne ikke lagre onboarding-data.";
-        setAuthError(message);
-        return false;
-      }
-      onLogin(role);
+      beginProviderSignupInProgress("profile");
+      setProviderSignupResumeStep("profile");
+      onProviderSignupGateChange?.(true);
+      setProviderAuthStep("profile");
       return true;
     } finally {
       setVerifyingOtp(false);
     }
+  };
+
+  const handleCompleteProviderSignup = async () => {
+    setAuthError(null);
+    const role = resolveLoginRole();
+    setCompletingSignup(true);
+    try {
+      let coords = signupCoords;
+      if (!coords) {
+        coords = await readDeviceLocation();
+        if (coords) setSignupCoords(coords);
+      }
+      if (
+        !coords ||
+        !Number.isFinite(coords.lat) ||
+        !Number.isFinite(coords.lng)
+      ) {
+        setAuthError(
+          isEn
+            ? "Location is required to finish signup. Enable GPS and try again."
+            : "Posisjon er påkrevd for å fullføre. Slå på GPS og prøv igjen.",
+        );
+        return false;
+      }
+      await persistProviderOnboarding();
+    } catch (e) {
+      const message =
+        e instanceof Error
+          ? e.message
+          : isEn
+            ? "Could not save onboarding data."
+            : "Kunne ikke lagre onboarding-data.";
+      setAuthError(message);
+      return false;
+    } finally {
+      setCompletingSignup(false);
+    }
+    clearProviderSignupInProgress();
+    onProviderSignupGateChange?.(false);
+    onLogin(role);
+    return true;
   };
 
   const toggleService = (
@@ -1888,7 +2091,7 @@ export default function LoginPage({
         [id]: {
           rating: 3,
           price,
-          canDeliver: true,
+          serviceMode: "both",
           mode: appMode,
           target: targetId,
           category: categoryId,
@@ -1987,7 +2190,17 @@ export default function LoginPage({
             {isEn ? "Log in" : "Logg inn"}
           </button>
           <button
-            onClick={() => setView("provider")}
+            onClick={() => {
+              setView("provider");
+              setProviderAuthStep("phone");
+              setShowSummary(true);
+              setStep("auth");
+              setShowOtp(false);
+              setOtp("");
+              setAuthError(null);
+              beginProviderSignupInProgress("phone");
+              onProviderSignupGateChange?.(true);
+            }}
             className="w-full py-4 bg-foreground text-background rounded-full font-medium"
           >
             {isEn ? "Become a provider" : "Bli tilbyder"}
@@ -2290,14 +2503,52 @@ export default function LoginPage({
 
         <div className="p-6">
           <button
-            onClick={() => {
-              setProviderAuthStep("profile");
-              setShowSummary(true);
-            }}
-            className="w-full py-4 bg-foreground text-background rounded-2xl font-semibold"
+            type="button"
+            onClick={() => void handleCompleteProviderSignup()}
+            disabled={
+              enabledCount === 0 ||
+              completingSignup ||
+              !signupCoords ||
+              locationStatus === "denied" ||
+              locationStatus === "pending"
+            }
+            className={cn(
+              "w-full py-4 bg-foreground text-background rounded-2xl font-semibold inline-flex items-center justify-center gap-2",
+              completingSignup
+                ? "opacity-90"
+                : "disabled:opacity-40",
+            )}
           >
-            {isEn ? "Continue to verification" : "Fortsett til verifisering"}
+            {completingSignup ? (
+              <>
+                <Loader2 className="h-5 w-5 animate-spin shrink-0" />
+                {isEn ? "Saving..." : "Lagrer..."}
+              </>
+            ) : isEn ? (
+              "Complete signup"
+            ) : (
+              "Fullfør registrering"
+            )}
           </button>
+          {(!signupCoords || locationStatus === "denied") && (
+            <div className="mt-3 text-center space-y-2">
+              <p className="text-sm text-red-600">
+                {isEn
+                  ? "Location is required. Enable GPS to finish signup."
+                  : "Posisjon er påkrevd. Slå på GPS for å fullføre."}
+              </p>
+              <button
+                type="button"
+                onClick={retrySignupLocation}
+                className="text-sm font-medium underline text-foreground"
+              >
+                {isEn ? "Retry location" : "Prøv posisjon igjen"}
+              </button>
+            </div>
+          )}
+          {authError && (
+            <p className="text-sm text-red-600 mt-2 text-center">{authError}</p>
+          )}
         </div>
       </main>
     );
@@ -2315,13 +2566,21 @@ export default function LoginPage({
                 setOtp("");
                 setProviderAuthStep("phone");
               } else if (providerAuthStep === "phone") {
-                setPaymentMethod(null);
-                setProviderAuthStep("payment");
-              } else if (providerAuthStep === "payment") {
-                setProfileName("");
-                setProviderAuthStep("profile");
-              } else {
+                clearProviderSignupInProgress();
+                onProviderSignupGateChange?.(false);
                 setShowSummary(false);
+                setStep("services");
+                setView("landing");
+              } else if (providerAuthStep === "payment") {
+                setProviderAuthStep("profile");
+                setProviderSignupResumeStep("profile");
+              } else if (providerAuthStep === "profile") {
+                setProviderAuthStep("otp");
+              } else {
+                clearProviderSignupInProgress();
+                onProviderSignupGateChange?.(false);
+                setShowSummary(false);
+                setView("landing");
               }
             }}
             className="p-2 -ml-2"
@@ -2410,7 +2669,7 @@ export default function LoginPage({
             </>
           )}
 
-          {/* Step 2: Payment method */}
+          {/* Step: Stripe Connect payouts */}
           {providerAuthStep === "payment" && (
             <>
               <h1 className="text-2xl font-bold text-foreground mb-1">
@@ -2418,45 +2677,12 @@ export default function LoginPage({
               </h1>
               <p className="text-muted-foreground text-sm mb-6">
                 {isEn
-                  ? "How do you want to receive payments?"
-                  : "Hvordan vil du motta betaling?"}
+                  ? "Set up payouts with Stripe Connect. Automatic payout every Monday at 09:00."
+                  : "Sett opp utbetalinger med Stripe Connect. Automatisk utbetaling hver mandag kl. 09:00."}
               </p>
 
-              <div className="space-y-3">
-                <button
-                  onClick={() => setPaymentMethod("vipps")}
-                  className={cn(
-                    "w-full p-4 rounded-xl border-2 flex items-center gap-4 transition-all",
-                    paymentMethod === "vipps"
-                      ? "border-[#FF5B24] bg-[#FF5B24]/5"
-                      : "border-border hover:border-muted-foreground/30",
-                  )}
-                >
-                  <div className="w-12 h-12 bg-[#FF5B24] rounded-xl flex items-center justify-center">
-                    <span className="text-white font-bold text-lg">V</span>
-                  </div>
-                  <div className="flex-1 text-left">
-                    <p className="font-semibold text-foreground">Vipps</p>
-                    <p className="text-xs text-muted-foreground">
-                      {isEn
-                        ? "Instant payments to your Vipps"
-                        : "Direkte til din Vipps"}
-                    </p>
-                  </div>
-                  {paymentMethod === "vipps" && (
-                    <Check className="w-5 h-5 text-[#FF5B24]" />
-                  )}
-                </button>
-
-                <button
-                  onClick={() => setPaymentMethod("bank")}
-                  className={cn(
-                    "w-full p-4 rounded-xl border-2 flex items-center gap-4 transition-all",
-                    paymentMethod === "bank"
-                      ? "border-foreground bg-foreground/5"
-                      : "border-border hover:border-muted-foreground/30",
-                  )}
-                >
+              <div className="rounded-xl border-2 border-border p-4 space-y-3">
+                <div className="flex items-center gap-4">
                   <div className="w-12 h-12 bg-muted rounded-xl flex items-center justify-center">
                     <svg
                       className="w-6 h-6 text-foreground"
@@ -2471,23 +2697,36 @@ export default function LoginPage({
                   </div>
                   <div className="flex-1 text-left">
                     <p className="font-semibold text-foreground">
-                      {isEn ? "Bank account" : "Bankkonto"}
+                      {isEn ? "Bank account via Stripe" : "Bankkonto via Stripe"}
                     </p>
                     <p className="text-xs text-muted-foreground">
                       {isEn
-                        ? "Weekly payouts to your bank"
-                        : "Ukentlige utbetalinger"}
+                        ? "Automatic payout every Monday at 09:00"
+                        : "Automatisk utbetaling hver mandag kl. 09:00"}
                     </p>
                   </div>
-                  {paymentMethod === "bank" && (
+                  {paymentMethod === "stripe" && (
                     <Check className="w-5 h-5 text-foreground" />
                   )}
-                </button>
+                </div>
+                {paymentMethod === "stripe" ? (
+                  <p className="text-xs text-green-600">
+                    {isEn
+                      ? "Payouts connected. Continue to choose your services."
+                      : "Utbetalinger koblet. Fortsett for å velge tjenester."}
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    {isEn
+                      ? "You will complete identity and bank details on Stripe, then return here."
+                      : "Du fullfører identitet og bankdetaljer hos Stripe, deretter kommer du tilbake hit."}
+                  </p>
+                )}
               </div>
             </>
           )}
 
-          {/* Step 3: Phone */}
+          {/* Step: Phone */}
           {providerAuthStep === "phone" && (
             <>
               <h1 className="text-2xl font-bold text-foreground mb-1">
@@ -2566,47 +2805,79 @@ export default function LoginPage({
         <div className="p-6">
           <button
             onClick={() => {
-              if (providerAuthStep === "profile" && profileName.length >= 2) {
-                setProviderAuthStep("payment");
-              } else if (providerAuthStep === "payment" && paymentMethod) {
-                setProviderAuthStep("phone");
-              } else if (providerAuthStep === "phone" && phone.length >= 8) {
+              if (providerAuthStep === "phone" && phone.length >= 8) {
                 void handleSendOtp().then((ok) => {
                   if (ok) setProviderAuthStep("otp");
                 });
               } else if (providerAuthStep === "otp" && otp.length >= 6) {
                 void handleVerifyOtp();
+              } else if (providerAuthStep === "profile" && profileName.length >= 2) {
+                setProviderAuthStep("payment");
+                setProviderSignupResumeStep("payment");
+              } else if (providerAuthStep === "payment") {
+                if (paymentMethod === "stripe") {
+                  setProviderSignupResumeStep("services");
+                  setShowSummary(false);
+                  setStep("services");
+                } else {
+                  void startSignupStripeConnect();
+                }
               }
             }}
             disabled={
-              (providerAuthStep === "profile" && profileName.length < 2) ||
-              (providerAuthStep === "payment" && !paymentMethod) ||
               (providerAuthStep === "phone" && phone.length < 8) ||
               (providerAuthStep === "otp" && otp.length < 6) ||
+              (providerAuthStep === "profile" && profileName.length < 2) ||
               sendingOtp ||
-              verifyingOtp
+              verifyingOtp ||
+              completingSignup ||
+              stripeConnectBusy
             }
             className="w-full py-4 bg-foreground text-background rounded-xl font-semibold disabled:opacity-40"
           >
-            {providerAuthStep === "otp"
-              ? verifyingOtp
+            {providerAuthStep === "payment"
+              ? stripeConnectBusy
                 ? isEn
-                  ? "Verifying..."
-                  : "Bekrefter..."
-                : isEn
-                  ? "Complete signup"
-                  : "Fullfør registrering"
-              : providerAuthStep === "phone" && sendingOtp
-                ? isEn
-                  ? "Sending..."
-                  : "Sender..."
-                : isEn
-                  ? "Continue"
-                  : "Fortsett"}
+                  ? "Opening Stripe..."
+                  : "Åpner Stripe..."
+                : paymentMethod === "stripe"
+                  ? isEn
+                    ? "Continue"
+                    : "Fortsett"
+                  : isEn
+                    ? "Continue with Stripe"
+                    : "Fortsett med Stripe"
+              : providerAuthStep === "otp"
+                ? verifyingOtp
+                  ? isEn
+                    ? "Verifying..."
+                    : "Bekrefter..."
+                  : isEn
+                    ? "Continue"
+                    : "Fortsett"
+                : providerAuthStep === "phone" && sendingOtp
+                  ? isEn
+                    ? "Sending..."
+                    : "Sender..."
+                  : isEn
+                    ? "Continue"
+                    : "Fortsett"}
           </button>
           {authError && (
             <p className="text-sm text-red-600 mt-2 text-center">{authError}</p>
           )}
+          {providerAuthStep === "payment" &&
+            process.env.NODE_ENV !== "production" && (
+              <button
+                type="button"
+                onClick={skipStripeConnectForDev}
+                className="w-full py-3 text-sm text-muted-foreground mt-1 underline"
+              >
+                {isEn
+                  ? "Skip Connect for now (dev only)"
+                  : "Hopp over Connect for nå (kun dev)"}
+              </button>
+            )}
           {providerAuthStep === "otp" && (
             <button
               onClick={() => void handleSendOtp()}
@@ -2632,7 +2903,17 @@ export default function LoginPage({
     <main className="h-[100dvh] w-full max-w-md mx-auto bg-background flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between px-4 pt-14 pb-2">
-        <button onClick={() => setView("landing")} className="p-2 -ml-2">
+        <button
+          onClick={() => {
+            if (paymentMethod) {
+              setProviderAuthStep("payment");
+              setShowSummary(true);
+            } else {
+              setView("landing");
+            }
+          }}
+          className="p-2 -ml-2"
+        >
           <ChevronLeft className="w-5 h-5" />
         </button>
         {enabledCount > 0 && (
@@ -2654,6 +2935,42 @@ export default function LoginPage({
           {isEn
             ? "Select services and rate yourself 1-5 stars."
             : "Velg tjenester og rate deg selv med stjerner fra 1-5."}
+        </p>
+        <p
+          className={cn(
+            "text-xs mt-2",
+            locationStatus === "ready"
+              ? "text-green-600"
+              : locationStatus === "denied"
+                ? "text-red-600"
+                : "text-muted-foreground",
+          )}
+        >
+          {locationStatus === "ready"
+            ? isEn
+              ? "Location ready for area pricing."
+              : "Posisjon klar for områdepris."
+            : locationStatus === "pending"
+              ? isEn
+                ? "Getting your location…"
+                : "Henter posisjon…"
+              : locationStatus === "denied"
+                ? isEn
+                  ? "Location required — enable GPS, then retry before finishing."
+                  : "Posisjon påkrevd — slå på GPS og prøv igjen før fullføring."
+                : null}
+          {locationStatus === "denied" ? (
+            <>
+              {" "}
+              <button
+                type="button"
+                onClick={retrySignupLocation}
+                className="underline font-medium"
+              >
+                {isEn ? "Retry" : "Prøv igjen"}
+              </button>
+            </>
+          ) : null}
         </p>
       </div>
 
@@ -2803,7 +3120,7 @@ export default function LoginPage({
               </div>
 
               {/* Service cards */}
-              <div className="space-y-2">
+              <div className="space-y-3 py-1">
                 {services.map((service) => {
                   const serviceKey = `${appMode}-${targetId}-${catId}-${service.id}`;
                   const isEnabled = !!enabledServices[serviceKey];
@@ -2814,11 +3131,13 @@ export default function LoginPage({
                   return (
                     <div
                       key={serviceKey}
-                      className="glass-morphism-strong rounded-2xl overflow-hidden border-0 shadow-sm"
+                      className="rounded-2xl bg-white"
+                      style={{ boxShadow: "0 6px 20px rgba(15,23,42,0.14)" }}
                     >
+                      <div className="overflow-hidden rounded-2xl">
                       {/* Card row - EXACT same as app */}
                       <button
-                        className="w-full p-4 text-left transition-all duration-300 hover:bg-white/10"
+                        className="w-full p-4 text-left transition-all duration-300 hover:bg-black/[0.02]"
                         onClick={() =>
                           isEnabled &&
                           setExpandedService(isExpanded ? null : serviceKey)
@@ -2826,7 +3145,7 @@ export default function LoginPage({
                       >
                         <div className="flex items-center gap-3">
                           {/* Service icon */}
-                          <div className="w-10 h-10 glass-morphism rounded-xl flex items-center justify-center border-0 flex-shrink-0">
+                          <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-[#F3F4F2] border-none flex-shrink-0">
                             <CategoryIcon
                               appMode={appMode}
                               category={catId}
@@ -2913,8 +3232,8 @@ export default function LoginPage({
                             </div>
                             <p className="text-[10px] text-gray-500">
                               {isEn
-                                ? "Higher rating = more jobs. Customers also rate you."
-                                : "Høyere rating = flere oppdrag. Kunder rater deg også."}
+                                ? "Not shown to customers. It helps us send you the right kind of jobs."
+                                : "Ikke synlig for kunder. Hjelper oss sende deg riktig type oppdrag."}
                             </p>
                           </div>
 
@@ -2926,8 +3245,12 @@ export default function LoginPage({
                                 : "Hjelp oss sette områdepris"}
                             </p>
                             {(() => {
-                              const priceMin = Math.round(service.price * 0.5);
-                              const priceMax = Math.round(service.price * 2);
+                              const { min: priceMin, max: priceMax } =
+                                snapPriceRangeKr(
+                                  service.price * 0.5,
+                                  service.price * 2,
+                                );
+                              const snapped = snapPriceKr(config.price);
                               return (
                                 <>
                                   <div className="flex items-center gap-2">
@@ -2935,23 +3258,26 @@ export default function LoginPage({
                                       type="range"
                                       min={priceMin}
                                       max={priceMax}
-                                      value={config.price}
+                                      step={25}
+                                      value={Math.min(
+                                        priceMax,
+                                        Math.max(priceMin, snapped),
+                                      )}
                                       onChange={(e) =>
                                         setEnabledServices((prev) => ({
                                           ...prev,
                                           [serviceKey]: {
                                             ...prev[serviceKey],
-                                            price: parseInt(e.target.value, 10),
+                                            price: snapPriceKr(
+                                              parseInt(e.target.value, 10),
+                                            ),
                                           },
                                         }))
                                       }
                                       className="flex-1 accent-foreground"
                                     />
                                     <span className="text-sm font-medium text-gray-800 w-16 text-right">
-                                      {formatDisplayPrice(
-                                        config.price,
-                                        language,
-                                      )}
+                                      {formatDisplayPrice(snapped, language)}
                                     </span>
                                   </div>
                                   <div className="flex justify-between text-[10px] text-gray-400 mt-0.5 px-0.5">
@@ -2971,50 +3297,9 @@ export default function LoginPage({
                                 : "Vi tar gjennomsnittet av alle tilbydere i ditt område."}
                             </p>
                           </div>
-
-                          {/* Delivery toggle */}
-                          <div>
-                            <div className="flex items-center justify-between">
-                              <p className="text-xs text-gray-600">
-                                {isEn
-                                  ? "Can come to customer?"
-                                  : "Kan komme til kunde?"}
-                              </p>
-                              <button
-                                className={cn(
-                                  "w-10 h-6 rounded-full transition-all relative",
-                                  config.canDeliver
-                                    ? "bg-green-500"
-                                    : "bg-gray-300/60",
-                                )}
-                                onClick={() =>
-                                  setEnabledServices((prev) => ({
-                                    ...prev,
-                                    [serviceKey]: {
-                                      ...prev[serviceKey],
-                                      canDeliver: !prev[serviceKey].canDeliver,
-                                    },
-                                  }))
-                                }
-                              >
-                                <div
-                                  className={cn(
-                                    "absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-all",
-                                    config.canDeliver ? "right-1" : "left-1",
-                                  )}
-                                />
-                              </button>
-                            </div>
-                            {config.canDeliver && (
-                              <p className="text-[10px] text-green-600 mt-1">
-                                {isEn
-                                  ? `+${formatDisplayPrice(150, language)} kr + ${formatDisplayPrice(10, language)}/km`
-                                  : "+150 kr  + 10 kr/km"}
-                              </p>
-                            )}
-                          </div>
                         </div>
                       )}
+                      </div>
                     </div>
                   );
                 })}

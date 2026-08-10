@@ -1,9 +1,10 @@
 /**
  * Demand zone display tiers from used_capacity % (same metric as dynamic pricing).
  * Customer vs provider colors are inverted at read time.
+ * "closed" = no live providers within the 10 km match radius for that service.
  */
 
-export type DemandZoneTier = "green" | "blue" | "red";
+export type DemandZoneTier = "green" | "blue" | "red" | "closed";
 export type DemandZoneAudience = "customer" | "provider";
 
 /** Low / mid / high capacity bands (percent). */
@@ -29,6 +30,20 @@ export function tierForAudience(
   return base;
 }
 
+/** Prefer closed-market state over capacity color when nobody is live nearby. */
+export function tierFromCapacityOrClosed(
+  usedCapacityPct: number | null | undefined,
+  marketClosed: boolean,
+  audience: DemandZoneAudience,
+): DemandZoneTier {
+  if (marketClosed) return "closed";
+  const pct =
+    usedCapacityPct != null && Number.isFinite(usedCapacityPct)
+      ? Number(usedCapacityPct)
+      : 50;
+  return tierForAudience(pct, audience);
+}
+
 const LABELS: Record<
   DemandZoneAudience,
   Record<DemandZoneTier, { en: string; no: string }>
@@ -46,6 +61,10 @@ const LABELS: Record<
       en: "Few available — higher prices, longer wait",
       no: "Fa tilgjengelige — hoyere priser, lengre ventetid",
     },
+    closed: {
+      en: "No providers available right now",
+      no: "Ingen tilbydere tilgjengelig nå",
+    },
   },
   provider: {
     green: {
@@ -59,6 +78,10 @@ const LABELS: Record<
     red: {
       en: "Low demand",
       no: "Lav etterspørsel",
+    },
+    closed: {
+      en: "No demand nearby",
+      no: "Ingen etterspørsel i nærheten",
     },
   },
 };
@@ -80,11 +103,19 @@ const SHORT_LABELS: Record<
     green: { en: "Many available", no: "Mange ledige" },
     blue: { en: "Normal", no: "Normal" },
     red: { en: "Almost full", no: "Nesten full" },
+    closed: {
+      en: "No providers available right now",
+      no: "Ingen tilbydere tilgjengelig nå",
+    },
   },
   provider: {
     green: { en: "High demand", no: "Hoy etterspørsel" },
     blue: { en: "Normal demand", no: "Normal etterspørsel" },
     red: { en: "Low demand", no: "Lav etterspørsel" },
+    closed: {
+      en: "No demand nearby",
+      no: "Ingen etterspørsel i nærheten",
+    },
   },
 };
 
@@ -103,6 +134,8 @@ export function tierPriceArrow(tier: DemandZoneTier): string {
       return "▲";
     case "green":
       return "▼";
+    case "closed":
+      return "—";
     default:
       return "•";
   }
@@ -114,7 +147,22 @@ export function tierTextClass(tier: DemandZoneTier): string {
       return "text-green-600";
     case "red":
       return "text-red-600";
+    case "closed":
+      return "text-gray-500";
     default:
       return "text-blue-600";
+  }
+}
+
+export function tierColor(tier: DemandZoneTier): string {
+  switch (tier) {
+    case "green":
+      return "#16A34A";
+    case "red":
+      return "#DC2626";
+    case "closed":
+      return "#6B7280";
+    default:
+      return "#2563EB";
   }
 }

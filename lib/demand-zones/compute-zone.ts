@@ -6,7 +6,6 @@ import {
 } from "@/lib/pricing/constants";
 import { gridIdToBounds, gridIdToCenter } from "@/lib/demand-zones/grid";
 import {
-  markStaleProvidersOffline,
   providerPresenceCutoffIso,
 } from "@/lib/provider/presence";
 
@@ -37,6 +36,7 @@ async function fetchActiveOrdersForService(
       .from("orders")
       .select("id, customer_lat, customer_lng, status, created_at, service_id")
       .eq("service_id", serviceId)
+      .eq("is_test", false)
       .in("status", [...statuses])
       .gte("created_at", since);
 
@@ -100,8 +100,8 @@ async function fetchOnlineProviderLocations(
   supabase: SupabaseClient,
   serviceId: string,
 ) {
-  // Drop abandoned sessions before we count "online" supply.
-  await markStaleProvidersOffline(supabase);
+  // Stale-provider sweeps stay on cron only — demand-zone map loads must not
+  // kick active providers offline while they are heartbeating.
 
   const { data: skills, error: skillsErr } = await supabase
     .from("provider_skills")
@@ -124,6 +124,8 @@ async function fetchOnlineProviderLocations(
     .select("id, lat, lng")
     .in("id", providerIds)
     .eq("is_online", true)
+    .eq("stripe_payouts_enabled", true)
+    .eq("admin_approved", true)
     .gte("last_online_at", cutoff);
   if (providersErr) {
     throw new Error(`provider_details: ${providersErr.message}`);

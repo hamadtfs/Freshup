@@ -88,6 +88,17 @@ export async function submitSignupBasePrices(input: {
 
   if (priceSubmissions.length === 0) return [];
 
+  if (
+    !input.coords ||
+    !Number.isFinite(input.coords.lat) ||
+    !Number.isFinite(input.coords.lng)
+  ) {
+    return priceSubmissions.map(({ serviceId }) => ({
+      serviceId,
+      reason: "missing_coordinates",
+    }));
+  }
+
   const failures: SignupPriceFailure[] = [];
   await Promise.all(
     priceSubmissions.map(async ({ serviceId, price }) => {
@@ -102,9 +113,8 @@ export async function submitSignupBasePrices(input: {
             service_id: serviceId,
             price,
             source: "signup",
-            ...(input.coords
-              ? { lat: input.coords.lat, lng: input.coords.lng }
-              : {}),
+            lat: input.coords!.lat,
+            lng: input.coords!.lng,
           }),
         });
         if (!res.ok) {

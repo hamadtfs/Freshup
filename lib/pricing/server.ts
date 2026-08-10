@@ -24,6 +24,7 @@ import {
   resolveUsedCapacityPct,
   type UsedCapacitySource,
 } from "./used-capacity";
+import { countOnlineProvidersNearby } from "./nearby-online-providers";
 
 type AnyClient = ReturnType<typeof createAdminClient>;
 
@@ -223,6 +224,12 @@ export interface QuoteRequest {
   areaId?: string | null;
   /** Recompute ~1 km grid capacity instead of the 5-minute cache (price lock). */
   preferLiveCapacity?: boolean;
+  /**
+   * Precomputed closed-market flag from quote-bulk batch count.
+   * When set, skips a per-service nearby-provider recount.
+   */
+  marketClosed?: boolean;
+  onlineProvidersNearby?: number;
 }
 
 export interface QuoteResponse extends QuoteBreakdown {
@@ -233,6 +240,9 @@ export interface QuoteResponse extends QuoteBreakdown {
   basePriceSampleSize: number;
   basePriceIsActive: boolean;
   usedCapacitySource?: UsedCapacitySource;
+  /** No live providers for this service within the 10 km match radius. */
+  marketClosed: boolean;
+  onlineProvidersNearby: number;
 }
 
 /**
@@ -276,6 +286,26 @@ export async function buildQuote(
     { preferLive: !!req.preferLiveCapacity },
   );
   const usedCapacityPct = capacity.pct;
+
+  let marketClosed = false;
+  let onlineProvidersNearby = 0;
+  if (typeof req.marketClosed === "boolean") {
+    marketClosed = req.marketClosed;
+    onlineProvidersNearby = Math.max(0, Number(req.onlineProvidersNearby) || 0);
+  } else if (lat != null && lng != null) {
+    const nearby = await countOnlineProvidersNearby(
+      supabase,
+      serviceId,
+      lat,
+      lng,
+      undefined,
+      req.deliveryMode === "home" || req.deliveryMode === "provider"
+        ? req.deliveryMode
+        : null,
+    );
+    marketClosed = nearby.marketClosed;
+    onlineProvidersNearby = nearby.count;
+  }
 
   const isHomeVisit = req.deliveryMode === "home";
 
@@ -332,6 +362,8 @@ export async function buildQuote(
   const breakdown = computeQuote({
     providerBasePrice: baseInfo.basePrice,
     usedCapacityPct,
+    // Closed market: show base price only (no −30% / +30% dynamic multiplier).
+    ...(marketClosed ? { multiplierOverride: 0 } : {}),
     deliveryKm,
     isHomeVisit,
     addons,
@@ -346,5 +378,7 @@ export async function buildQuote(
     basePriceSampleSize: baseInfo.sampleSize,
     basePriceIsActive: baseInfo.isActive,
     usedCapacitySource: capacity.source,
+    marketClosed,
+    onlineProvidersNearby,
   };
 }

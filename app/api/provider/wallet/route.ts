@@ -8,6 +8,8 @@ import {
   INSTANT_PAYOUT_FEE_NOK,
   maskBankAccount,
 } from "@/lib/payments/provider-wallet";
+import { loadProviderConnectStatus } from "@/lib/payments/provider-eligibility";
+import { isStripeConfigured } from "@/lib/payments/stripe";
 import {
   formatTxDate,
   formatTxShortDate,
@@ -26,16 +28,18 @@ export async function GET(req: NextRequest) {
     const language = req.nextUrl.searchParams.get("lang") === "en" ? "en" : "no";
     const nextPayoutAt = getNextAutomaticPayoutDate();
 
-    const [availableBalance, bankLast4, { data: payouts }] = await Promise.all([
-      getProviderAvailableBalance(supabase, providerId),
-      getProviderBankLast4(supabase, providerId),
-      supabase
-        .from("payouts")
-        .select("id, amount, fee, payout_type, status, created_at")
-        .eq("provider_id", providerId)
-        .order("created_at", { ascending: false })
-        .limit(40),
-    ]);
+    const [availableBalance, bankLast4, connect, { data: payouts }] =
+      await Promise.all([
+        getProviderAvailableBalance(supabase, providerId),
+        getProviderBankLast4(supabase, providerId),
+        loadProviderConnectStatus(supabase, providerId),
+        supabase
+          .from("payouts")
+          .select("id, amount, fee, payout_type, status, created_at")
+          .eq("provider_id", providerId)
+          .order("created_at", { ascending: false })
+          .limit(40),
+      ]);
 
     const history = (payouts ?? []).map((p) => {
       const payoutType = String(p.payout_type || "automatic");
@@ -74,6 +78,12 @@ export async function GET(req: NextRequest) {
         masked: maskBankAccount(bankLast4),
       },
       payout_history: history,
+      connect: connect
+        ? {
+            ...connect,
+            stripe_configured: isStripeConfigured(),
+          }
+        : null,
     });
   } catch (e) {
     console.error("[provider/wallet]", e);

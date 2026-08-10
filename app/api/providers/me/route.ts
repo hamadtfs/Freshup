@@ -3,10 +3,6 @@ import {
   PERFORMANCE_ROLLING_DAYS,
   type ProviderPerformanceTier,
 } from "@/lib/providers/performance-score";
-import {
-  normalizeAcceptingDeliveryMode,
-  type AcceptingDeliveryMode,
-} from "@/lib/provider/accepting-mode";
 import { createAdminClient } from "@/lib/supabase/server";
 import { withTransientRetry } from "@/lib/supabase/transient";
 import { NextRequest, NextResponse } from "next/server";
@@ -17,14 +13,13 @@ interface ProviderProfileUpdatePayload {
   email?: string;
   avatarUrl?: string;
   deliveryModes?: string[];
-  /** Live accepting mode — does not change capability `delivery_modes`. */
-  acceptingDeliveryMode?: AcceptingDeliveryMode | "provider";
   address?: string;
   lat?: number;
   lng?: number;
   defaultLat?: number;
   defaultLng?: number;
   defaultAddress?: string;
+  notificationOptIn?: boolean;
 }
 
 function normalizeString(value: unknown): string | null {
@@ -69,18 +64,6 @@ function normalizeDeliveryModes(value: unknown): string[] | null {
   return [...new Set(modes)];
 }
 
-function resolveServiceModeId(
-  deliveryModes: string[],
-): "home" | "provider" | "both" {
-  const normalized = (deliveryModes || []).map((m) => String(m).toLowerCase());
-  const hasHome = normalized.includes("home");
-  const hasProvider =
-    normalized.includes("provider") || normalized.includes("at_provider");
-  if (hasHome && hasProvider) return "both";
-  if (hasProvider) return "provider";
-  return "home";
-}
-
 type ProviderTier = "gold" | "silver" | "bronze";
 
 function tierForScore(score: number): ProviderTier {
@@ -110,8 +93,16 @@ export async function GET(req: NextRequest) {
         Date.now() - PERFORMANCE_ROLLING_DAYS * 24 * 60 * 60 * 1000,
       ).toISOString();
       const nowIso = new Date().toISOString();
-      const [modes, targets, categories, skills, offers, pendingOffers, completedOrders] =
-        await Promise.all([
+      const [
+        modes,
+        targets,
+        categories,
+        skills,
+        offers,
+        pendingOffers,
+        completedOrders,
+        profileRow,
+      ] = await Promise.all([
           supabase
             .from("provider_modes")
             .select("mode_id")
@@ -147,6 +138,11 @@ export async function GET(req: NextRequest) {
             .select("status, completed_at, accepted_at")
             .eq("provider_id", providerId)
             .eq("status", "completed"),
+          supabase
+            .from("profiles")
+            .select("notification_opt_in")
+            .eq("id", providerId)
+            .maybeSingle(),
         ]);
       if (modes.error) throw modes.error;
       if (targets.error) throw targets.error;
@@ -155,6 +151,7 @@ export async function GET(req: NextRequest) {
       if (offers.error) throw offers.error;
       if (pendingOffers.error) throw pendingOffers.error;
       if (completedOrders.error) throw completedOrders.error;
+      if (profileRow.error) throw profileRow.error;
 
       const cutoffMs = new Date(cutoffIso).getTime();
       const offerRows = offers.data || [];
@@ -244,6 +241,9 @@ export async function GET(req: NextRequest) {
           responseBuckets: performance.responseBuckets,
         },
         pendingOffers: pendingOffers.data ?? [],
+        notificationOptIn:
+          (profileRow.data as { notification_opt_in?: boolean } | null)
+            ?.notification_opt_in !== false,
       });
     });
   } catch (error) {
@@ -267,10 +267,49 @@ export async function PUT(req: NextRequest) {
     const updates = (await req.json()) as ProviderProfileUpdatePayload;
     const raw = updates as unknown as Record<string, unknown>;
 
+    // Lean path: notification toggle only — do not upsert provider_details.
+    const payloadKeys = Object.keys(raw).filter(
+      (k) => raw[k] !== undefined,
+    );
+    if (
+      payloadKeys.length === 1 &&
+      payloadKeys[0] === "notificationOptIn"
+    ) {
+      const notificationOptIn = Boolean(raw.notificationOptIn);
+      const now = new Date().toISOString();
+      const { data: existingProfile, error: profileReadErr } = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("id", providerId)
+        .maybeSingle();
+      if (profileReadErr) throw profileReadErr;
+      if (existingProfile?.id) {
+        const { error: optInErr } = await supabase
+          .from("profiles")
+          .update({
+            notification_opt_in: notificationOptIn,
+            updated_at: now,
+          })
+          .eq("id", providerId);
+        if (optInErr) throw optInErr;
+      } else {
+        const { error: optInErr } = await supabase.from("profiles").insert({
+          id: providerId,
+          notification_opt_in: notificationOptIn,
+          updated_at: now,
+        });
+        if (optInErr) throw optInErr;
+      }
+      return NextResponse.json({
+        success: true,
+        notificationOptIn,
+      });
+    }
+
     const { data: existing, error: existingErr } = await supabase
       .from("provider_details")
       .select(
-        "business_name, phone, email, avatar_url, delivery_modes, accepting_delivery_mode, address, lat, lng",
+        "business_name, phone, email, avatar_url, delivery_modes, address, lat, lng",
       )
       .eq("id", providerId)
       .maybeSingle();
@@ -352,15 +391,6 @@ export async function PUT(req: NextRequest) {
             .filter(Boolean)
         : null;
 
-    const hasAcceptingUpdate =
-      Object.prototype.hasOwnProperty.call(raw, "acceptingDeliveryMode") ||
-      Object.prototype.hasOwnProperty.call(raw, "accepting_delivery_mode");
-    const acceptingDeliveryMode = hasAcceptingUpdate
-      ? normalizeAcceptingDeliveryMode(
-          raw.acceptingDeliveryMode ?? raw.accepting_delivery_mode,
-        ) ?? "both"
-      : null;
-
     const lat = pickCoordWithAlias("lat", "defaultLat", "lat");
     const lng = pickCoordWithAlias("lng", "defaultLng", "lng");
 
@@ -383,37 +413,63 @@ export async function PUT(req: NextRequest) {
           email,
           avatar_url: avatarUrl,
           delivery_modes: deliveryModes,
-          ...(hasAcceptingUpdate
-            ? { accepting_delivery_mode: acceptingDeliveryMode }
-            : {}),
           address,
           lat,
           lng,
+          // Keep default_* in sync with the live/service location on profile save.
+          default_address: address,
+          default_lat: lat,
+          default_lng: lng,
           updated_at: now,
         },
         { onConflict: "id" },
       );
     if (detailsErr) throw detailsErr;
 
-    if (
-      Object.prototype.hasOwnProperty.call(raw, "deliveryModes") &&
-      Array.isArray(deliveryModes) &&
-      deliveryModes.length > 0
-    ) {
-      // Capabilities only — keep skills on "both" when the provider supports
-      // both modes. Live accepting mode is `accepting_delivery_mode`.
-      const serviceModeId = resolveServiceModeId(deliveryModes);
-      const { error: skillsErr } = await supabase
-        .from("provider_skills")
-        .update({ service_mode_id: serviceModeId, updated_at: now })
-        .eq("provider_id", providerId);
-      if (skillsErr) throw skillsErr;
+    // Matching / live delivery is provider_skills.service_mode_id only.
+    // accepting_delivery_mode column removed (Munib 6 Aug).
+
+    let notificationOptIn: boolean | undefined;
+    if (Object.prototype.hasOwnProperty.call(raw, "notificationOptIn")) {
+      notificationOptIn = Boolean((updates as any).notificationOptIn);
+      const { data: existingProfile, error: profileReadErr } = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("id", providerId)
+        .maybeSingle();
+      if (profileReadErr) throw profileReadErr;
+      if (existingProfile?.id) {
+        const { error: optInErr } = await supabase
+          .from("profiles")
+          .update({
+            notification_opt_in: notificationOptIn,
+            updated_at: now,
+          })
+          .eq("id", providerId);
+        if (optInErr) throw optInErr;
+      } else {
+        const { error: optInErr } = await supabase.from("profiles").insert({
+          id: providerId,
+          notification_opt_in: notificationOptIn,
+          updated_at: now,
+        });
+        if (optInErr) throw optInErr;
+      }
+    } else {
+      const { data: profileOpt } = await supabase
+        .from("profiles")
+        .select("notification_opt_in")
+        .eq("id", providerId)
+        .maybeSingle();
+      notificationOptIn =
+        (profileOpt as { notification_opt_in?: boolean } | null)
+          ?.notification_opt_in !== false;
     }
 
     const { data: savedRow, error: readErr } = await supabase
       .from("provider_details")
       .select(
-        "business_name, phone, email, avatar_url, delivery_modes, accepting_delivery_mode, address, lat, lng",
+        "business_name, phone, email, avatar_url, delivery_modes, address, lat, lng",
       )
       .eq("id", providerId)
       .maybeSingle();
@@ -427,10 +483,6 @@ export async function PUT(req: NextRequest) {
     const outEmail = normalizeString(row?.email) ?? email ?? "";
     const outAvatar = normalizeAvatar(row?.avatar_url) ?? avatarUrl ?? "";
     const outAddress = normalizeString(row?.address) ?? address ?? "";
-    const outAccepting =
-      normalizeAcceptingDeliveryMode(row?.accepting_delivery_mode) ??
-      (hasAcceptingUpdate ? acceptingDeliveryMode : null) ??
-      "both";
 
     return NextResponse.json({
       success: true,
@@ -438,7 +490,6 @@ export async function PUT(req: NextRequest) {
         delivery_modes: Array.isArray(row?.delivery_modes)
           ? row.delivery_modes
           : deliveryModes,
-        accepting_delivery_mode: outAccepting,
       },
       contact: {
         name: outName || "",
@@ -454,7 +505,7 @@ export async function PUT(req: NextRequest) {
         lat: outLat,
         lng: outLng,
       },
-      acceptingDeliveryMode: outAccepting,
+      notificationOptIn,
     });
   } catch (error) {
     console.error("[v0] Update provider error:", error);

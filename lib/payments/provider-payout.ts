@@ -155,11 +155,23 @@ export async function createProviderPayout(
 
   const { data: provider } = await supabase
     .from("provider_details")
-    .select("stripe_account_id, stripe_onboarded")
+    .select(
+      "stripe_account_id, stripe_onboarded, stripe_payouts_enabled, admin_approved",
+    )
     .eq("id", providerId)
     .maybeSingle();
 
+  if (!provider?.stripe_payouts_enabled) {
+    return { ok: false, error: "PAYOUT_SETUP_REQUIRED" };
+  }
+  if (!provider?.admin_approved) {
+    return { ok: false, error: "ADMIN_PENDING" };
+  }
+
   const stripeAccountId = String(provider?.stripe_account_id || "").trim();
+  if (!stripeAccountId) {
+    return { ok: false, error: "PAYOUT_SETUP_REQUIRED" };
+  }
   const stripePayoutId = await triggerStripePayout(
     stripeAccountId,
     netToBank,

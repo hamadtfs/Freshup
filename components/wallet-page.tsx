@@ -31,6 +31,13 @@ type WalletData = {
   next_automatic_payout: { at: string; label: string };
   bank_account: { last4: string | null; masked: string };
   payout_history: PayoutHistoryItem[];
+  connect?: {
+    stripe_payouts_enabled?: boolean;
+    admin_approved?: boolean;
+    can_go_online?: boolean;
+    block_reason?: string | null;
+    stripe_configured?: boolean;
+  } | null;
 };
 
 function WalletSummarySkeleton() {
@@ -77,6 +84,7 @@ export default function WalletPage({
   const [showInstantSheet, setShowInstantSheet] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [connectBusy, setConnectBusy] = useState(false);
 
   const formatPrice = (price: number) => formatDisplayPrice(price, language);
 
@@ -132,10 +140,78 @@ export default function WalletPage({
     void load();
   }, [load]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (
+      params.get("stripe_connect") === "return" ||
+      params.get("stripe_connect") === "refresh"
+    ) {
+      void (async () => {
+        const token = await getToken();
+        if (!token) return;
+        await fetch("/api/providers/stripe-connect/status?refresh=1", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        await load();
+      })();
+    }
+  }, [getToken, load]);
+
   const availableBalance = wallet?.available_balance ?? 0;
   const instantFee = wallet?.instant_payout_fee ?? 10;
   const netInstant = Math.max(0, availableBalance - instantFee);
   const canInstantPayout = availableBalance > instantFee;
+  const needsPayoutSetup = !wallet?.connect?.stripe_payouts_enabled;
+  const waitingAdmin =
+    Boolean(wallet?.connect?.stripe_payouts_enabled) &&
+    !wallet?.connect?.admin_approved;
+
+  const handleStartPayoutSetup = async () => {
+    setConnectBusy(true);
+    setError(null);
+    try {
+      const token = await getToken();
+      if (!token) {
+        setError(isEn ? "Please sign in" : "Logg inn");
+        return;
+      }
+      const origin = window.location.origin;
+      const res = await fetch("/api/providers/stripe-connect/start", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          return_url: `${origin}/wallet?stripe_connect=return`,
+          refresh_url: `${origin}/wallet?stripe_connect=refresh`,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(
+          String(
+            data?.error ||
+              (isEn ? "Could not start payout setup" : "Kunne ikke starte utbetalingsoppsett"),
+          ),
+        );
+        return;
+      }
+      const url = String(data?.onboarding_url || "");
+      if (url) {
+        window.location.href = url;
+        return;
+      }
+      await load();
+    } catch {
+      setError(
+        isEn ? "Could not start payout setup" : "Kunne ikke starte utbetalingsoppsett",
+      );
+    } finally {
+      setConnectBusy(false);
+    }
+  };
 
   const handleConfirmInstantPayout = async () => {
     setConfirming(true);
@@ -241,9 +317,35 @@ export default function WalletPage({
                 </div>
               </div>
 
+              {needsPayoutSetup ? (
+                <div className="mt-5 space-y-2">
+                  <p className="text-xs text-primary-foreground/80">
+                    {isEn
+                      ? "Set up payouts with Stripe to go online and receive jobs."
+                      : "Sett opp utbetalinger med Stripe for å gå online og motta jobber."}
+                  </p>
+                  <Button
+                    className="w-full h-12 rounded-xl bg-primary-foreground text-primary hover:bg-primary-foreground/90 font-semibold"
+                    disabled={connectBusy}
+                    onClick={() => void handleStartPayoutSetup()}
+                  >
+                    {connectBusy ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : null}
+                    {isEn ? "Set up payouts" : "Sett opp utbetalinger"}
+                  </Button>
+                </div>
+              ) : waitingAdmin ? (
+                <p className="mt-5 text-xs text-primary-foreground/80">
+                  {isEn
+                    ? "Payout setup complete. Waiting for FreshUp admin approval before you can go online."
+                    : "Utbetalingsoppsett fullført. Venter på FreshUp-godkjenning før du kan gå online."}
+                </p>
+              ) : null}
+
               <Button
                 className="w-full mt-5 h-12 rounded-xl bg-primary-foreground text-primary hover:bg-primary-foreground/90 font-semibold"
-                disabled={!canInstantPayout}
+                disabled={!canInstantPayout || needsPayoutSetup}
                 onClick={() => {
                   setConfirmError(null);
                   setShowInstantSheet(true);

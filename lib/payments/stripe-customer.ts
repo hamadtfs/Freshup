@@ -32,6 +32,13 @@ export async function ensureStripeCustomer(
     { onConflict: "id" },
   );
 
+  await supabase.rpc("upsert_account_role_grant", {
+    p_user_id: userId,
+    p_role: "customer",
+    p_status: "active",
+    p_activate: true,
+  });
+
   return customer.id;
 }
 

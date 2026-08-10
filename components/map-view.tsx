@@ -193,7 +193,6 @@ export default function MapView({
   followCenter = true,
   customerMarkerOnTop = false,
   viewportResetKey,
-  recenterNonce = 0,
   demandOverlay = null,
   showDemandOverlay = false,
   fleetMarkerStyle = "numbered",
@@ -217,8 +216,6 @@ export default function MapView({
   customerMarkerOnTop?: boolean;
   /** New job / session — allow auto-fit again after the user has panned or zoomed. */
   viewportResetKey?: string | number | null;
-  /** Bump to clear pan lock and fly to `center` (GPS FAB). */
-  recenterNonce?: number;
   /** Matches app `Language`; controls loading overlay copy. */
   language?: "no" | "en";
   /** Opptatt / demand-zone grid overlay (1 km cells, green / blue / red). */
@@ -452,26 +449,6 @@ export default function MapView({
     lastSyncedCenterRef.current = null;
   }, [viewportResetKey]);
 
-  // GPS FAB / explicit recenter — clear pan lock and fly to current center.
-  useEffect(() => {
-    if (!recenterNonce || !mapRef.current || !ready) return;
-    if (!isValidLngLat(center)) return;
-    userMovedViewportRef.current = false;
-    lastSyncedCenterRef.current = { lat: center.lat, lng: center.lng };
-    runProgrammaticViewport(() => {
-      if (lockViewportToGridCell) {
-        fitBrowseViewportOneKm(mapRef.current!, center.lat, center.lng);
-        return;
-      }
-      mapRef.current!.easeTo({
-        center: [center.lng, center.lat],
-        duration: 450,
-      });
-    });
-    // Intentionally keyed on nonce only — center is read at bump time.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recenterNonce, ready]);
-
   useEffect(() => {
     if (!mapRef.current || !ready || !lockViewportToGridCell) return;
     if (!isValidLngLat(center) || userMovedViewportRef.current) return;
@@ -505,6 +482,28 @@ export default function MapView({
       isProgrammaticMoveRef.current = false;
     });
   };
+
+  // GPS / job reset — force-fly even after the user panned (and if center coords unchanged).
+  useEffect(() => {
+    if (!followCenter || !mapRef.current || !ready || !isValidLngLat(center))
+      return;
+    if (viewportResetKey == null) return;
+    // Ignore the initial "browse:0" mount — map load already set the camera.
+    if (String(viewportResetKey).endsWith(":0")) return;
+    userMovedViewportRef.current = false;
+    lastSyncedCenterRef.current = { lat: center.lat, lng: center.lng };
+    runProgrammaticViewport(() => {
+      if (lockViewportToGridCell) {
+        fitBrowseViewportOneKm(mapRef.current!, center.lat, center.lng);
+        return;
+      }
+      mapRef.current!.easeTo({
+        center: [center.lng, center.lat],
+        duration: 600,
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- explicit recenter only
+  }, [viewportResetKey, ready]);
 
   // Keep center in sync (disabled during active jobs so fitBounds can show both markers)
   useEffect(() => {

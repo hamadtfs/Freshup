@@ -3,6 +3,8 @@ import type { ProviderOnboardingInput } from "@/lib/auth/provider-onboarding"
 export type OAuthPendingPayload = {
   role: "customer" | "provider"
   providerOnboarding?: ProviderOnboardingInput
+  /** Phone-first provider signup: resume profile→payment→services after OAuth. */
+  providerSignupContinue?: boolean
 }
 
 const STORAGE_KEY = "freshup.oauth.pending"

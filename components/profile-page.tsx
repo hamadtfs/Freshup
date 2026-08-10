@@ -11,67 +11,11 @@ import {
   Shield,
   ChevronRight,
   Camera,
-  LocateFixed,
-  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import MapView from "@/components/map-view";
 import { cn } from "@/lib/utils";
-
-function SkeletonBone({
-  className,
-}: {
-  className?: string;
-}) {
-  return (
-    <div className={cn("animate-pulse rounded-md bg-gray-200/80", className)} />
-  );
-}
-
-/** Matches mobile ProfileSkeleton: avatar + fields + settings rows. */
-function ProfileSkeleton() {
-  return (
-    <div className="pb-8">
-      <div className="flex flex-col items-center mb-6">
-        <SkeletonBone className="h-24 w-24 rounded-full" />
-        <SkeletonBone className="mt-3 h-3.5 w-28" />
-      </div>
-
-      <SkeletonBone className="mb-3 h-2.5 w-24" />
-      <div className="mb-6 space-y-3 rounded-xl border border-gray-200 bg-white p-4">
-        {[0, 1, 2, 3].map((i) => (
-          <div key={i} className="flex items-center gap-3">
-            <SkeletonBone className="h-9 w-9 rounded-lg" />
-            <div className="flex-1 space-y-1.5">
-              <SkeletonBone className="h-2.5 w-[28%]" />
-              <SkeletonBone className="h-3.5 w-[70%]" />
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <SkeletonBone className="mb-3 h-2.5 w-20" />
-      <div className="space-y-2">
-        {[0, 1, 2].map((i) => (
-          <div
-            key={i}
-            className="flex items-center gap-3 rounded-xl border border-gray-200 bg-white p-4"
-          >
-            <SkeletonBone className="h-9 w-9 rounded-lg" />
-            <SkeletonBone className="h-3.5 flex-1 max-w-[50%]" />
-            <SkeletonBone className="h-3.5 w-3.5 rounded" />
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-6 rounded-xl border border-gray-200 bg-white p-4 text-center space-y-2">
-        <SkeletonBone className="mx-auto h-3 w-[70%]" />
-        <SkeletonBone className="mx-auto h-3.5 w-[40%]" />
-      </div>
-    </div>
-  );
-}
 interface ProfilePageProps {
   onBack: () => void;
   userMode: "customer" | "provider";
@@ -165,10 +109,10 @@ export default function ProfilePage({
   const [settingsLocation, setSettingsLocation] = useState<SettingsLocation>(
     INITIAL_SETTINGS_LOCATION,
   );
+  const [notificationOptIn, setNotificationOptIn] = useState(true);
+  const [notificationBusy, setNotificationBusy] = useState(false);
   const [showLocationPicker, setShowLocationPicker] = useState(false);
   const [mapPickerResolving, setMapPickerResolving] = useState(false);
-  const [mapPickerLocating, setMapPickerLocating] = useState(false);
-  const [mapPickerRecenterNonce, setMapPickerRecenterNonce] = useState(0);
   const [mapPickerTarget, setMapPickerTarget] =
     useState<LocationTarget>("default");
   const [message, setMessage] = useState<string | null>(null);
@@ -195,13 +139,12 @@ export default function ProfilePage({
         privacy: "Privacy",
         defaultLocation: "Default location",
         mapPickerTitle: "Select location",
-        mapPickerHint: "Tap on the map to pin your location, or use GPS.",
+        mapPickerHint: "Tap on the map to pin your location.",
         mapPickerLocating: "Finding your area…",
-        mapPickerGps: "Use current GPS location",
-        mapPickerGpsFailed: "Could not get location. Check that GPS is enabled.",
         selectedCoords: "Selected",
         done: "Done",
         on: "On",
+        off: "Off",
         loggedInAs: "You are logged in as",
         provider: "Provider",
         customer: "Customer",
@@ -238,14 +181,12 @@ export default function ProfilePage({
       privacy: "Personvern",
       defaultLocation: "Standardlokasjon",
       mapPickerTitle: "Velg lokasjon",
-      mapPickerHint: "Trykk på kartet for å markere lokasjonen, eller bruk GPS.",
+      mapPickerHint: "Trykk på kartet for å markere lokasjonen din.",
       mapPickerLocating: "Finner området…",
-      mapPickerGps: "Bruk nåværende GPS-posisjon",
-      mapPickerGpsFailed:
-        "Kunne ikke hente posisjon. Sjekk at GPS er på og prøv igjen.",
       selectedCoords: "Valgt",
       done: "Ferdig",
       on: "På",
+      off: "Av",
       loggedInAs: "Du er logget inn som",
       provider: "Tilbyder",
       customer: "Kunde",
@@ -266,41 +207,34 @@ export default function ProfilePage({
 
   const OSLO_FALLBACK = { lat: 59.9139, lng: 10.7522 } as const;
 
+  const notificationsValue = notificationOptIn ? t.on : t.off;
+
   const settingsItems = [
-    { id: "notifications", icon: Bell, label: t.notifications, value: t.on },
+    {
+      id: "notifications",
+      icon: Bell,
+      label: t.notifications,
+      value: notificationsValue,
+      status: notificationOptIn ? ("success" as const) : ("default" as const),
+    },
     { id: "privacy", icon: Shield, label: t.privacy, value: "" },
     {
       id: "location",
       icon: MapPin,
-      label: t.defaultLocation,
-      value: locationLabel(settingsLocation),
-    },
-  ];
-
-  const providerSettings = [
-    {
-      id: "provider-location",
-      icon: MapPin,
-      label: language === "en" ? "Service location" : "Tjenestelokasjon",
-      value: locationLabel({
-        address: contact.address,
-        lat: contact.lat,
-        lng: contact.lng,
-      }),
-      status: "default" as const,
-    },
-    {
-      id: "provider-notifications",
-      icon: Bell,
-      label: t.notifications,
-      value: t.on,
-      status: "success" as const,
-    },
-    {
-      id: "provider-privacy",
-      icon: Shield,
-      label: t.privacy,
-      value: "",
+      label:
+        userMode === "provider"
+          ? language === "en"
+            ? "Service location"
+            : "Tjenestelokasjon"
+          : t.defaultLocation,
+      value:
+        userMode === "provider"
+          ? locationLabel({
+              address: contact.address,
+              lat: contact.lat,
+              lng: contact.lng,
+            })
+          : locationLabel(settingsLocation),
       status: "default" as const,
     },
   ];
@@ -339,6 +273,7 @@ export default function ProfilePage({
         const body = await res.json();
         const serverContact = body?.contact || {};
         const serverDefaultLocation = body?.defaultLocation || {};
+        setNotificationOptIn(body?.notificationOptIn !== false);
 
         // Load from localStorage as backup
         let localName = "";
@@ -807,46 +742,44 @@ export default function ProfilePage({
           resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude });
         },
         () => resolve(null),
-        { enableHighAccuracy: true, maximumAge: 0, timeout: 12_000 },
+        { enableHighAccuracy: true, maximumAge: 60_000, timeout: 12_000 },
       );
     });
 
-  const applyPickerPin = (target: LocationTarget, lat: number, lng: number) => {
-    const coordLabel = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-    if (target === "service") {
-      setContact((prev) => ({
-        ...prev,
-        lat,
-        lng,
-        address: prev.address.trim().length > 0 ? prev.address : coordLabel,
-      }));
-    } else {
-      setSettingsLocation((prev) => ({
-        ...prev,
-        lat,
-        lng,
-        address: prev.address.trim().length > 0 ? prev.address : coordLabel,
-      }));
-    }
-  };
-
-  const goToPickerGps = async () => {
-    setMapPickerLocating(true);
+  const toggleNotifications = async () => {
+    if (!userId || notificationBusy || loading) return;
+    const next = !notificationOptIn;
+    const previous = notificationOptIn;
+    setNotificationOptIn(next);
+    setNotificationBusy(true);
     setError(null);
     try {
-      if (typeof navigator === "undefined" || !navigator.geolocation) {
-        setError(t.geoNotAvailable);
-        return;
+      const endpoint =
+        userMode === "provider" ? "/api/providers/me" : "/api/customers/me";
+      const userIdHeader =
+        userMode === "provider" ? "x-provider-id" : "x-user-id";
+      const res = await fetch(endpoint, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          [userIdHeader]: userId,
+        },
+        body: JSON.stringify({ notificationOptIn: next }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(body?.error || t.profileSaveFailed);
       }
-      const fromGps = await tryDeviceLocation();
-      if (!fromGps) {
-        setError(t.mapPickerGpsFailed);
-        return;
-      }
-      applyPickerPin(mapPickerTarget, fromGps.lat, fromGps.lng);
-      setMapPickerRecenterNonce((n) => n + 1);
+      setNotificationOptIn(
+        typeof body?.notificationOptIn === "boolean"
+          ? body.notificationOptIn
+          : next,
+      );
+    } catch (err: any) {
+      setNotificationOptIn(previous);
+      setError(err?.message || t.profileSaveFailed);
     } finally {
-      setMapPickerLocating(false);
+      setNotificationBusy(false);
     }
   };
 
@@ -870,8 +803,27 @@ export default function ProfilePage({
       if (!hasSavedPin) {
         const fromGps = await tryDeviceLocation();
         if (fromGps) {
-          applyPickerPin(target, fromGps.lat, fromGps.lng);
-          setMapPickerRecenterNonce((n) => n + 1);
+          if (target === "service") {
+            setContact((prev) => ({
+              ...prev,
+              lat: fromGps.lat,
+              lng: fromGps.lng,
+              address:
+                prev.address.trim().length > 0
+                  ? prev.address
+                  : `${fromGps.lat.toFixed(5)}, ${fromGps.lng.toFixed(5)}`,
+            }));
+          } else {
+            setSettingsLocation((prev) => ({
+              ...prev,
+              lat: fromGps.lat,
+              lng: fromGps.lng,
+              address:
+                prev.address.trim().length > 0
+                  ? prev.address
+                  : `${fromGps.lat.toFixed(5)}, ${fromGps.lng.toFixed(5)}`,
+            }));
+          }
           return;
         }
 
@@ -884,8 +836,23 @@ export default function ProfilePage({
         if (addressHint) {
           const geo = await geocodeFreeText(addressHint);
           if (geo) {
-            applyPickerPin(target, geo.lat, geo.lng);
-            setMapPickerRecenterNonce((n) => n + 1);
+            if (target === "service") {
+              setContact((prev) => ({
+                ...prev,
+                lat: geo.lat,
+                lng: geo.lng,
+                address:
+                  prev.address.trim().length > 0 ? prev.address : addressHint,
+              }));
+            } else {
+              setSettingsLocation((prev) => ({
+                ...prev,
+                lat: geo.lat,
+                lng: geo.lng,
+                address:
+                  prev.address.trim().length > 0 ? prev.address : addressHint,
+              }));
+            }
             return;
           }
         }
@@ -915,21 +882,20 @@ export default function ProfilePage({
             setError(null);
             setIsEditing(true);
           }}
-          className="text-sm font-medium text-gray-700 disabled:opacity-60"
-          disabled={saving || loading}
+          className="text-sm font-medium text-gray-700"
+          disabled={saving}
         >
           {saving ? t.saving : isEditing ? t.save : t.edit}
         </button>
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 pb-8">
+        {loading && (
+          <p className="text-sm text-gray-700 mb-4">{t.loadingProfile}</p>
+        )}
         {error && <p className="text-sm text-red-600 mb-4">{error}</p>}
         {message && <p className="text-sm text-green-700 mb-4">{message}</p>}
 
-        {loading ? (
-          <ProfileSkeleton />
-        ) : (
-          <>
         {/* Avatar */}
         <div className="flex flex-col items-center mb-6">
           <div className="relative w-24 h-24 mb-3">
@@ -1081,81 +1047,82 @@ export default function ProfilePage({
           {t.settings}
         </p>
         <div className="space-y-2">
-          {settingsItems.map((item) => (
-            <button
-              key={item.id}
-              className="w-full flex items-center gap-3 bg-white border border-gray-200 p-4 rounded-xl hover:bg-gray-50 transition-colors"
-              onClick={() => {
-                if (item.id === "location") {
-                  openLocationPicker("default");
-                }
-              }}
-            >
-              <div className="w-10 h-10 bg-muted rounded-lg flex items-center justify-center">
-                <item.icon className="h-5 w-5 text-muted-foreground" />
-              </div>
-              <div className="flex-1 text-left">
-                <p className="text-sm font-medium text-foreground">
-                  {item.label}
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                {item.value && (
-                  <span className="text-xs text-gray-500">{item.value}</span>
-                )}
-                <ChevronRight className="h-4 w-4 text-gray-400" />
-              </div>
-            </button>
-          ))}
-        </div>
-
-        {/* Provider Settings */}
-        {userMode === "provider" && (
-          <>
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3 mt-6">
-              {language === "en"
-                ? "Provider settings"
-                : "Tilbyderinnstillinger"}
-            </p>
-            <div className="space-y-2">
-              {providerSettings.map((item) => (
-                <button
-                  key={item.id}
-                  className="w-full flex items-center gap-3 bg-white border border-gray-200 p-4 rounded-xl hover:bg-gray-50 transition-colors"
-                  onClick={() => {
-                    if (item.id === "provider-location") {
-                      openLocationPicker("service");
-                    }
-                  }}
-                >
-                  <div className="w-10 h-10 bg-muted rounded-lg flex items-center justify-center">
-                    <item.icon className="h-5 w-5 text-muted-foreground" />
-                  </div>
-                  <div className="flex-1 text-left">
-                    <p className="text-sm font-medium text-foreground">
-                      {item.label}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {item.value && (
+          {settingsItems.map((item) => {
+            const isNotifications = item.id === "notifications";
+            return (
+              <button
+                key={item.id}
+                type="button"
+                className="w-full flex items-center gap-3 bg-white border border-gray-200 p-4 rounded-xl hover:bg-gray-50 transition-colors"
+                disabled={isNotifications ? notificationBusy || loading : loading}
+                onClick={() => {
+                  if (item.id === "location") {
+                    openLocationPicker(
+                      userMode === "provider" ? "service" : "default",
+                    );
+                  } else if (isNotifications) {
+                    void toggleNotifications();
+                  }
+                }}
+              >
+                <div className="w-10 h-10 bg-muted rounded-lg flex items-center justify-center">
+                  <item.icon className="h-5 w-5 text-muted-foreground" />
+                </div>
+                <div className="flex-1 text-left">
+                  <p className="text-sm font-medium text-foreground">
+                    {item.label}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {isNotifications ? (
+                    <>
                       <span
                         className={cn(
                           "text-xs",
-                          item.status === "success"
-                              ? "text-green-500"
-                              : "text-muted-foreground",
+                          notificationOptIn
+                            ? "text-green-500"
+                            : "text-muted-foreground",
                         )}
                       >
                         {item.value}
                       </span>
-                    )}
-                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                  </div>
-                </button>
-              ))}
-            </div>
-          </>
-        )}
+                      <span
+                        aria-hidden
+                        className={cn(
+                          "relative h-6 w-10 rounded-full transition-colors",
+                          notificationOptIn ? "bg-green-500" : "bg-gray-300",
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            "absolute top-1 h-4 w-4 rounded-full bg-white shadow transition-all",
+                            notificationOptIn ? "right-1" : "left-1",
+                          )}
+                        />
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      {item.value && (
+                        <span
+                          className={cn(
+                            "text-xs",
+                            item.status === "success"
+                              ? "text-green-500"
+                              : "text-gray-500",
+                          )}
+                        >
+                          {item.value}
+                        </span>
+                      )}
+                      <ChevronRight className="h-4 w-4 text-gray-400" />
+                    </>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+        </div>
 
         {/* Mode Badge */}
         <div className="mt-6 bg-white border border-gray-200 rounded-xl p-4 text-center">
@@ -1164,8 +1131,6 @@ export default function ProfilePage({
             {userMode === "provider" ? t.provider : t.customer}
           </p>
         </div>
-          </>
-        )}
       </div>
 
       {/* Location Picker Modal */}
@@ -1188,74 +1153,77 @@ export default function ProfilePage({
                 {t.cancel}
               </Button>
             </div>
-            <div className="relative min-h-[220px] flex-1">
-              <div className="absolute inset-0">
-                {mapPickerResolving && (
-                  <div className="pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center">
-                    <span className="rounded-full bg-white/90 px-3 py-1 text-xs text-gray-700 shadow">
-                      {t.mapPickerLocating}
-                    </span>
-                  </div>
-                )}
-                <MapView
-                  center={{
-                    lat:
-                      typeof (mapPickerTarget === "service"
-                        ? contact.lat
-                        : settingsLocation.lat) === "number"
-                        ? mapPickerTarget === "service"
-                          ? (contact.lat as number)
-                          : (settingsLocation.lat as number)
-                        : OSLO_FALLBACK.lat,
-                    lng:
-                      typeof (mapPickerTarget === "service"
-                        ? contact.lng
-                        : settingsLocation.lng) === "number"
-                        ? mapPickerTarget === "service"
-                          ? (contact.lng as number)
-                          : (settingsLocation.lng as number)
-                        : OSLO_FALLBACK.lng,
-                  }}
-                  customer={
+            <div className="relative min-h-0 flex-1">
+              {mapPickerResolving && (
+                <div className="pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center">
+                  <span className="rounded-full bg-white/90 px-3 py-1 text-xs text-gray-700 shadow">
+                    {t.mapPickerLocating}
+                  </span>
+                </div>
+              )}
+              <MapView
+                center={{
+                  lat:
                     typeof (mapPickerTarget === "service"
                       ? contact.lat
-                      : settingsLocation.lat) === "number" &&
+                      : settingsLocation.lat) === "number"
+                      ? mapPickerTarget === "service"
+                        ? (contact.lat as number)
+                        : (settingsLocation.lat as number)
+                      : OSLO_FALLBACK.lat,
+                  lng:
                     typeof (mapPickerTarget === "service"
                       ? contact.lng
                       : settingsLocation.lng) === "number"
-                      ? {
-                          lat:
-                            mapPickerTarget === "service"
-                              ? (contact.lat as number)
-                              : (settingsLocation.lat as number),
-                          lng:
-                            mapPickerTarget === "service"
-                              ? (contact.lng as number)
-                              : (settingsLocation.lng as number),
-                        }
-                      : null
+                      ? mapPickerTarget === "service"
+                        ? (contact.lng as number)
+                        : (settingsLocation.lng as number)
+                      : OSLO_FALLBACK.lng,
+                }}
+                customer={
+                  typeof (mapPickerTarget === "service"
+                    ? contact.lat
+                    : settingsLocation.lat) === "number" &&
+                  typeof (mapPickerTarget === "service"
+                    ? contact.lng
+                    : settingsLocation.lng) === "number"
+                    ? {
+                        lat:
+                          mapPickerTarget === "service"
+                            ? (contact.lat as number)
+                            : (settingsLocation.lat as number),
+                        lng:
+                          mapPickerTarget === "service"
+                            ? (contact.lng as number)
+                            : (settingsLocation.lng as number),
+                      }
+                    : null
+                }
+                onMapClick={(pt) => {
+                  if (mapPickerTarget === "service") {
+                    setContact((prev) => ({
+                      ...prev,
+                      lat: pt.lat,
+                      lng: pt.lng,
+                      address:
+                        prev.address.trim().length > 0
+                          ? prev.address
+                          : `${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)}`,
+                    }));
+                  } else {
+                    setSettingsLocation((prev) => ({
+                      ...prev,
+                      lat: pt.lat,
+                      lng: pt.lng,
+                      address:
+                        prev.address.trim().length > 0
+                          ? prev.address
+                          : `${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)}`,
+                    }));
                   }
-                  onMapClick={(pt) => {
-                    applyPickerPin(mapPickerTarget, pt.lat, pt.lng);
-                  }}
-                  recenterNonce={mapPickerRecenterNonce}
-                  language={language}
-                />
-              </div>
-              <button
-                type="button"
-                className="absolute bottom-4 right-4 z-50 flex h-11 w-11 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-900 shadow-lg disabled:opacity-60"
-                onClick={() => void goToPickerGps()}
-                disabled={mapPickerLocating || mapPickerResolving}
-                title={t.mapPickerGps}
-                aria-label={t.mapPickerGps}
-              >
-                {mapPickerLocating ? (
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                ) : (
-                  <LocateFixed className="h-5 w-5" strokeWidth={2.25} />
-                )}
-              </button>
+                }}
+                language={language}
+              />
             </div>
             <div className="flex items-center justify-between border-t border-gray-200 px-4 py-3">
               <p className="text-xs text-gray-600">

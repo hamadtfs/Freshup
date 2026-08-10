@@ -33,4 +33,11 @@ describe("provider short labels match inverted tier colors", () => {
     expect(tierShortLabel("red", "provider", "en")).toBe("Low demand");
     expect(tierTextClass("red")).toContain("red");
   });
+
+  it("closed tier shows no-providers label for customers", () => {
+    expect(tierShortLabel("closed", "customer", "en")).toBe(
+      "No providers available right now",
+    );
+    expect(tierTextClass("closed")).toContain("gray");
+  });
 });
