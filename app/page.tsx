@@ -3,7 +3,14 @@
 import type React from "react";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -12,7 +19,10 @@ import {
   readStoredDashboardMode,
   writeStoredDashboardMode,
 } from "@/lib/auth/dashboard-mode";
-import { fetchAccountRoles, setActiveRoleClaim } from "@/lib/auth/fetch-account-roles";
+import {
+  fetchAccountRoles,
+  setActiveRoleClaim,
+} from "@/lib/auth/fetch-account-roles";
 import {
   metadataRoleFromUser,
   pickDashboardMode,
@@ -47,10 +57,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { offerCountdownSeconds } from "@/lib/orders/offerCountdown";
-import {
-  formatMmSs,
-  isReadyForNextUnlocked,
-} from "@/lib/orders/readyForNext";
+import { formatMmSs, isReadyForNextUnlocked } from "@/lib/orders/readyForNext";
 import { computeServiceElapsedSeconds } from "@/lib/orders/serviceElapsed";
 import { ProviderOnlineToggle } from "@/components/provider-online-toggle";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
@@ -110,9 +117,7 @@ import {
   formatDbOrderStatusLabel,
   formatProviderJobStepTitle,
 } from "@/lib/orders/order-status-ui";
-import {
-  demandTierDotClass,
-} from "@/lib/demand-zones/client";
+import { demandTierDotClass } from "@/lib/demand-zones/client";
 import {
   capacityPctToTier,
   tierForAudience,
@@ -760,15 +765,13 @@ function isProviderOfferFullyHydrated(
   return !isPlaceholderServiceName(serviceName, language);
 }
 
-async function resolveProviderAccessToken(
-  supabase: {
-    auth: {
-      getSession: () => Promise<{
-        data: { session?: { access_token?: string } | null };
-      }>;
-    };
-  },
-): Promise<string | null> {
+async function resolveProviderAccessToken(supabase: {
+  auth: {
+    getSession: () => Promise<{
+      data: { session?: { access_token?: string } | null };
+    }>;
+  };
+}): Promise<string | null> {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const { data } = await supabase.auth.getSession();
     const token = data?.session?.access_token ?? null;
@@ -798,11 +801,13 @@ function resolveCustomerPartyFromProfile(
   );
 }
 
-function resolveServiceRowFromOrder(order: Record<string, unknown> | null | undefined) {
+function resolveServiceRowFromOrder(
+  order: Record<string, unknown> | null | undefined,
+) {
   if (!order) return null;
   const nested = order.services;
   if (!nested || typeof nested !== "object") return null;
-  return Array.isArray(nested) ? nested[0] ?? null : nested;
+  return Array.isArray(nested) ? (nested[0] ?? null) : nested;
 }
 
 function resolveCustomerProviderFromStatus(
@@ -1673,6 +1678,8 @@ const TRANSLATIONS: Record<Language, Record<string, string>> = {
     // Payment
     payment: "Betaling",
     total: "Totalt",
+    card_hold_disclosure:
+      "{quoted} — inntil {hold} reserveres avhengig av avstand. Du betaler kun sluttprisen.",
     delivery_fee: "Delivery-tillegg",
     distance: "Avstand",
     comment: "Kommentar",
@@ -1895,6 +1902,8 @@ const TRANSLATIONS: Record<Language, Record<string, string>> = {
     // Payment
     payment: "Payment",
     total: "Total",
+    card_hold_disclosure:
+      "Up to {hold} is reserved depending on distance. You only pay the final price.",
     delivery_fee: "Delivery fee",
     distance: "Distance",
     comment: "Comment",
@@ -4324,15 +4333,20 @@ function deliveryFlagsFromModes(modes: unknown): {
   at_provider: boolean;
 } {
   const list = Array.isArray(modes)
-    ? modes.map((v) => String(v || "").toLowerCase().trim()).filter(Boolean)
+    ? modes
+        .map((v) =>
+          String(v || "")
+            .toLowerCase()
+            .trim(),
+        )
+        .filter(Boolean)
     : [];
   if (list.length === 0) {
     return { home_service: true, at_provider: true };
   }
   return {
     home_service: list.includes("home"),
-    at_provider:
-      list.includes("at_provider") || list.includes("provider"),
+    at_provider: list.includes("at_provider") || list.includes("provider"),
   };
 }
 
@@ -6103,8 +6117,10 @@ export default function Page() {
   const [providerServicePausedAt, setProviderServicePausedAt] = useState<
     string | null
   >(null);
-  const [providerServicePausedTotalSeconds, setProviderServicePausedTotalSeconds] =
-    useState(0);
+  const [
+    providerServicePausedTotalSeconds,
+    setProviderServicePausedTotalSeconds,
+  ] = useState(0);
   const [providerReadyForNext, setProviderReadyForNext] = useState(false);
   const providerReadyForNextAutoAttemptedRef = useRef(false);
   const providerReadyForNextOptOutRef = useRef(false);
@@ -6425,7 +6441,11 @@ export default function Page() {
         if (!cancelled && typeof parsed?.avatarUrl === "string") {
           setUserAvatarUrl(parsed.avatarUrl);
         }
-        if (!cancelled && typeof parsed?.name === "string" && parsed.name.trim()) {
+        if (
+          !cancelled &&
+          typeof parsed?.name === "string" &&
+          parsed.name.trim()
+        ) {
           setMenuUserName(parsed.name.trim());
         }
       } catch {
@@ -6840,7 +6860,7 @@ export default function Page() {
             ? "home"
             : savedLocal === "provider" && allowProvider
               ? "provider"
-              : modeFromDb ?? (allowHome ? "home" : "provider");
+              : (modeFromDb ?? (allowHome ? "home" : "provider"));
 
         const snapshot = {
           ...existingSnapshot,
@@ -6915,14 +6935,7 @@ export default function Page() {
     } catch {
       // Keep the last known value on transient failures.
     }
-  }, [
-    hasSupabase,
-    isLoggedIn,
-    userMode,
-    loggedInUser?.id,
-    language,
-    supabase,
-  ]);
+  }, [hasSupabase, isLoggedIn, userMode, loggedInUser?.id, language, supabase]);
 
   useEffect(() => {
     if (!isLoggedIn || userMode !== "provider") {
@@ -7131,9 +7144,7 @@ export default function Page() {
         },
         body: JSON.stringify({
           is_online: next,
-          ...(pos &&
-          typeof pos.lat === "number" &&
-          typeof pos.lng === "number"
+          ...(pos && typeof pos.lat === "number" && typeof pos.lng === "number"
             ? { lat: pos.lat, lng: pos.lng }
             : {}),
         }),
@@ -7181,9 +7192,7 @@ export default function Page() {
         },
         body: JSON.stringify({
           heartbeat: true,
-          ...(pos &&
-          typeof pos.lat === "number" &&
-          typeof pos.lng === "number"
+          ...(pos && typeof pos.lat === "number" && typeof pos.lng === "number"
             ? { lat: pos.lat, lng: pos.lng }
             : {}),
         }),
@@ -7201,12 +7210,7 @@ export default function Page() {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [
-    hasSupabase,
-    loggedInUser?.id,
-    userMode,
-    isProviderOnline,
-  ]);
+  }, [hasSupabase, loggedInUser?.id, userMode, isProviderOnline]);
 
   const toggleProviderSkillActivePersisted = useCallback(
     async (serviceId: string, nextActive: boolean) => {
@@ -7223,7 +7227,9 @@ export default function Page() {
             return String(row?.mode_id || "").trim() || null;
           }
         }
-        for (const modeKey of Object.keys(FALLBACK_MODE_SERVICES) as AppMode[]) {
+        for (const modeKey of Object.keys(
+          FALLBACK_MODE_SERVICES,
+        ) as AppMode[]) {
           const targetsForMode = FALLBACK_MODE_SERVICES[modeKey] || {};
           for (const categoriesForTarget of Object.values(targetsForMode)) {
             for (const services of Object.values(categoriesForTarget || {})) {
@@ -7327,10 +7333,7 @@ export default function Page() {
   );
 
   const setProviderSkillModePersisted = useCallback(
-    async (
-      serviceId: string,
-      nextMode: "home" | "provider" | "both",
-    ) => {
+    async (serviceId: string, nextMode: "home" | "provider" | "both") => {
       if (!loggedInUser?.id) return;
       const variants = serviceIdVariantsForDashboard(serviceId);
       const previous = { ...providerSkillModes };
@@ -7631,7 +7634,9 @@ export default function Page() {
             language === "en"
               ? prettifyServiceName(
                   SERVICE_NAME_EN_BY_ID[normalizeServiceId(s.id)] ||
-                    SERVICE_NAME_EN_BY_ID[normalizeServiceId(pricingServiceId)] ||
+                    SERVICE_NAME_EN_BY_ID[
+                      normalizeServiceId(pricingServiceId)
+                    ] ||
                     s.name,
                 )
               : prettifyServiceName(s.name),
@@ -7639,8 +7644,11 @@ export default function Page() {
           availabilityMinutes: 0,
           // Stable pseudo-random decoration derived from service id so list
           // identity doesn't change on every recompute.
-          rating: 4.5 + ((s.id.charCodeAt(0) % 10) / 20),
-          bookings: 500 + ((s.id.charCodeAt(0) * 7 + s.id.charCodeAt(1 % s.id.length) * 13) % 1500),
+          rating: 4.5 + (s.id.charCodeAt(0) % 10) / 20,
+          bookings:
+            500 +
+            ((s.id.charCodeAt(0) * 7 + s.id.charCodeAt(1 % s.id.length) * 13) %
+              1500),
           tags:
             normalizeServiceId(s.id) ===
             normalizeServiceId(services[0]?.id ?? "")
@@ -7769,12 +7777,7 @@ export default function Page() {
 
     for (const c of currentCategories) {
       const catalogServices = [
-        ...getCatalogServices(
-          MODE_SERVICES_DB[appMode],
-          target,
-          c.id,
-          c.label,
-        ),
+        ...getCatalogServices(MODE_SERVICES_DB[appMode], target, c.id, c.label),
         ...getCatalogServices(
           FALLBACK_MODE_SERVICES[appMode],
           target,
@@ -8011,7 +8014,8 @@ export default function Page() {
             offerPayload: {
               offerId: String(offerRow?.id || jobOrder.id),
               orderId: String(jobOrder.id),
-              expiresAt: (offerRow as { expires_at?: string } | null)?.expires_at
+              expiresAt: (offerRow as { expires_at?: string } | null)
+                ?.expires_at
                 ? String((offerRow as { expires_at: string }).expires_at)
                 : null,
               customer: restoredCustomer,
@@ -8233,13 +8237,7 @@ export default function Page() {
     return () => {
       channel.unsubscribe();
     };
-  }, [
-    hasSupabase,
-    supabase,
-    userMode,
-    providerHeldNextJob?.orderId,
-    language,
-  ]);
+  }, [hasSupabase, supabase, userMode, providerHeldNextJob?.orderId, language]);
 
   // Reset target when app mode changes and the current target is invalid.
   useEffect(() => {
@@ -8677,7 +8675,9 @@ export default function Page() {
               setCustomerLivePos(orderCustomerLocation);
             }
             setProviderReadyForNext(false);
-            const orderStatus = order ? String((order as { status?: string }).status || "") : "";
+            const orderStatus = order
+              ? String((order as { status?: string }).status || "")
+              : "";
             const stepFromOrder = providerJobStepFromOrderStatus(orderStatus);
             setProviderJobStep((step) => {
               if (
@@ -9067,11 +9067,7 @@ export default function Page() {
       return;
     }
     const pos = providerBrowseGeolocRef.current;
-    if (
-      !pos ||
-      typeof pos.lat !== "number" ||
-      typeof pos.lng !== "number"
-    ) {
+    if (!pos || typeof pos.lat !== "number" || typeof pos.lng !== "number") {
       return;
     }
     void supabase
@@ -9344,7 +9340,13 @@ export default function Page() {
       return geoloc;
     }
     return null;
-  }, [preferLiveGps, userMode, customerSavedLocation, geoloc?.lat, geoloc?.lng]);
+  }, [
+    preferLiveGps,
+    userMode,
+    customerSavedLocation,
+    geoloc?.lat,
+    geoloc?.lng,
+  ]);
 
   /** Location used for catalog pricing — waits for profile settle to avoid flash. */
   const pricingCustomerLoc = useMemo((): LatLng | null => {
@@ -9416,9 +9418,7 @@ export default function Page() {
   // Round customerLoc to 0.01° (~1 km) so tiny GPS jitter doesn't spam the API.
   const pricingAreaKey = useMemo(() => {
     const pos =
-      userMode === "customer"
-        ? pricingCustomerLoc
-        : geoloc ?? OSLO_DEFAULT;
+      userMode === "customer" ? pricingCustomerLoc : (geoloc ?? OSLO_DEFAULT);
     if (typeof pos?.lat !== "number" || typeof pos?.lng !== "number") {
       return null;
     }
@@ -9457,9 +9457,7 @@ export default function Page() {
   ]);
   const bulkQuoteCoords = useMemo((): { lat: number; lng: number } | null => {
     const pos =
-      userMode === "customer"
-        ? pricingCustomerLoc
-        : geoloc ?? OSLO_DEFAULT;
+      userMode === "customer" ? pricingCustomerLoc : (geoloc ?? OSLO_DEFAULT);
     if (typeof pos?.lat !== "number" || typeof pos?.lng !== "number") {
       return null;
     }
@@ -9585,14 +9583,14 @@ export default function Page() {
           if (!Number.isFinite(servicePrice) || servicePrice <= 0) continue;
           const entry: DashboardDynamicPriceEntry = {
             customer: roundMoney(servicePrice),
-            multiplier: marketClosed
-              ? 0
-              : Number(item.multiplier ?? 0) || 0,
+            multiplier: marketClosed ? 0 : Number(item.multiplier ?? 0) || 0,
             usedCapacityPct: hasUsedCapacity ? usedCapacityPct : null,
             isActive: !!item.is_active,
             marketClosed,
           };
-          for (const variant of serviceIdVariantsForDashboard(item.service_id)) {
+          for (const variant of serviceIdVariantsForDashboard(
+            item.service_id,
+          )) {
             map[normalizeServiceId(variant)] = entry;
           }
         }
@@ -9611,7 +9609,10 @@ export default function Page() {
 
     void fetchBulkPrices(false);
     // Spec §2.3: recalculate used capacity every 5–10 minutes (not per booking).
-    const interval = setInterval(() => void fetchBulkPrices(true), 5 * 60 * 1000);
+    const interval = setInterval(
+      () => void fetchBulkPrices(true),
+      5 * 60 * 1000,
+    );
     return () => {
       cancelled = true;
       requestGen += 1;
@@ -9708,9 +9709,7 @@ export default function Page() {
           .select("provider_id, service_id")
           .eq("is_active", true)
           .eq("available_now", true),
-        supabase
-          .from("provider_categories")
-          .select("provider_id, category"),
+        supabase.from("provider_categories").select("provider_id, category"),
       ]);
 
       const map: Record<string, ProviderMeta> = {};
@@ -9935,8 +9934,7 @@ export default function Page() {
   }, [currentPage, isLoggedIn, step, userMode, providerJobStep]);
 
   const fleetFilterKey = useMemo(
-    () =>
-      `${appMode}|${mode}|${category}|${target}|${pricingAreaKey ?? ""}`,
+    () => `${appMode}|${mode}|${category}|${target}|${pricingAreaKey ?? ""}`,
     [appMode, mode, category, target, pricingAreaKey],
   );
 
@@ -10921,8 +10919,7 @@ export default function Page() {
       visibleServices.find(
         (s) =>
           normalizeServiceId(s.id) === normalizeServiceId(expandedStyleId) ||
-          bookingPricingServiceId(s) ===
-            normalizeServiceId(expandedStyleId),
+          bookingPricingServiceId(s) === normalizeServiceId(expandedStyleId),
       ) || { id: expandedStyleId },
     );
     const fetchKey = [
@@ -11059,7 +11056,10 @@ export default function Page() {
         lng = parsedLng;
       }
     }
-    if (mode === "home" && (typeof lat !== "number" || typeof lng !== "number")) {
+    if (
+      mode === "home" &&
+      (typeof lat !== "number" || typeof lng !== "number")
+    ) {
       return;
     }
 
@@ -11125,9 +11125,7 @@ export default function Page() {
           return;
         }
         const lockId =
-          typeof lockData?.lock_id === "string"
-            ? lockData.lock_id.trim()
-            : "";
+          typeof lockData?.lock_id === "string" ? lockData.lock_id.trim() : "";
         if (cancelled || !lockId) return;
         lockSucceeded = true;
         confirmPriceLockAttemptedRef.current = lockAttemptKey;
@@ -11590,7 +11588,8 @@ export default function Page() {
 
       await startOrderRealtimeWait();
     } catch (e) {
-      const message = e instanceof Error ? e.message : "Could not match providers";
+      const message =
+        e instanceof Error ? e.message : "Could not match providers";
       const noProviderError =
         message.includes("No providers available right now") ||
         message.includes("Ingen tilbydere tilgjengelig akkurat na");
@@ -12042,7 +12041,8 @@ export default function Page() {
           const row = payload?.new;
           if (!row) return;
           const dbStatus = String(row.status || "");
-          const isTransition = Boolean(dbStatus) && dbStatus !== lastAppliedDbStatus;
+          const isTransition =
+            Boolean(dbStatus) && dbStatus !== lastAppliedDbStatus;
           applyStatus({
             status: dbStatus,
             started_at: (row.started_at as string | null | undefined) ?? null,
@@ -13800,10 +13800,7 @@ export default function Page() {
 
   if (currentPage === "admin") {
     return wrapWithIncomingOffer(
-      <AdminVerificationsPage
-        onBack={handleBackToMenu}
-        language={language}
-      />,
+      <AdminVerificationsPage onBack={handleBackToMenu} language={language} />,
     );
   }
 
@@ -13842,8 +13839,7 @@ export default function Page() {
           userMode === "provider"
             ? mockIncomingRequest?.customer?.name ||
               (language === "en" ? "Customer" : "Kunde")
-            : provider?.name ||
-              (language === "en" ? "Provider" : "Tilbyder")
+            : provider?.name || (language === "en" ? "Provider" : "Tilbyder")
         }
         orderId={
           userMode === "provider"
@@ -14199,373 +14195,378 @@ export default function Page() {
         (() => {
           const bannerOffer =
             providerQueuedIncomingOffer || providerHeldNextJob!;
-          const bannerIsHeld = !providerQueuedIncomingOffer && !!providerHeldNextJob;
+          const bannerIsHeld =
+            !providerQueuedIncomingOffer && !!providerHeldNextJob;
           return (
-          <div
-            className="pointer-events-none fixed inset-x-0 top-0 z-[58] flex justify-center px-3 pt-[max(0.5rem,env(safe-area-inset-top))]"
-            role="region"
-            aria-label={bannerIsHeld ? t("next_job") : t("new_request")}
-          >
-            <div className="pointer-events-auto w-full max-w-md shadow-2xl">
-              <button
-                type="button"
-                className={cn(
-                  "w-full border-0 glass-morphism-strong px-4 py-3 text-left transition-transform active:scale-[0.99]",
-                  showProviderQueuedOfferSheet
-                    ? "rounded-t-2xl rounded-b-none"
-                    : "rounded-2xl",
-                )}
-                aria-expanded={showProviderQueuedOfferSheet}
-                aria-controls="queued-offer-panel"
-                onClick={() =>
-                  setShowProviderQueuedOfferSheet((expanded) => !expanded)
-                }
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                      {bannerIsHeld ? t("next_job") : t("new_request")}
-                    </p>
-                    <p className="truncate text-base font-semibold text-gray-900">
-                      {bannerOffer.service.name}
-                    </p>
-                    <p className="mt-0.5 text-xs text-gray-600">
-                      {bannerIsHeld
-                        ? providerCanStartHeldNextJob
-                          ? t("next_job_ready_hint")
-                          : t("next_job_waiting_hint")
-                        : showProviderQueuedOfferSheet
-                          ? t("new_request_banner_collapse_hint")
-                          : t("new_request_banner_hint")}
-                    </p>
-                  </div>
-                  <div className="flex flex-shrink-0 items-center gap-2">
-                    {!bannerIsHeld ? (
-                      <div className="rounded-xl bg-green-500 px-2.5 py-1.5 text-sm font-bold tabular-nums text-white">
-                        {providerQueuedOfferTimer}s
-                      </div>
-                    ) : null}
-                    {showProviderQueuedOfferSheet ? (
-                      <ChevronUp className="h-5 w-5 text-gray-500" />
-                    ) : (
-                      <ChevronDown className="h-5 w-5 text-gray-500" />
-                    )}
-                  </div>
-                </div>
-              </button>
-
-              {showProviderQueuedOfferSheet && (
-                <div
-                  id="queued-offer-panel"
-                  className="max-h-[min(55dvh,28rem)] overflow-y-auto rounded-b-2xl border-0 border-t border-white/20 glass-morphism-strong animate-in slide-in-from-top-2 duration-200"
+            <div
+              className="pointer-events-none fixed inset-x-0 top-0 z-[58] flex justify-center px-3 pt-[max(0.5rem,env(safe-area-inset-top))]"
+              role="region"
+              aria-label={bannerIsHeld ? t("next_job") : t("new_request")}
+            >
+              <div className="pointer-events-auto w-full max-w-md shadow-2xl">
+                <button
+                  type="button"
+                  className={cn(
+                    "w-full border-0 glass-morphism-strong px-4 py-3 text-left transition-transform active:scale-[0.99]",
+                    showProviderQueuedOfferSheet
+                      ? "rounded-t-2xl rounded-b-none"
+                      : "rounded-2xl",
+                  )}
+                  aria-expanded={showProviderQueuedOfferSheet}
+                  aria-controls="queued-offer-panel"
+                  onClick={() =>
+                    setShowProviderQueuedOfferSheet((expanded) => !expanded)
+                  }
                 >
-                  {!bannerIsHeld ? (
-                    <div className="shrink-0 px-4 pb-2 pt-2">
-                      <div className="flex justify-center gap-2">
-                        <div className="h-1 flex-1 overflow-hidden rounded-full bg-gray-200">
-                          <div
-                            className="h-full bg-green-500 transition-all duration-1000 ease-linear"
-                            style={{
-                              width: `${(providerQueuedOfferTimer / PROVIDER_OFFER_EXPIRES_SECONDS) * 100}%`,
-                            }}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
-                  <div className={cn("p-4", !bannerIsHeld && "pt-0")}>
-                    <div className="mb-4 flex items-center gap-3">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="glass-button h-8 w-8 flex-shrink-0 border-0 text-gray-700"
-                        onClick={() => setShowProviderQueuedOfferSheet(false)}
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
-                      <h2
-                        id="queued-offer-title"
-                        className="flex-1 text-lg font-semibold text-gray-900"
-                      >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
                         {bannerIsHeld ? t("next_job") : t("new_request")}
-                      </h2>
+                      </p>
+                      <p className="truncate text-base font-semibold text-gray-900">
+                        {bannerOffer.service.name}
+                      </p>
+                      <p className="mt-0.5 text-xs text-gray-600">
+                        {bannerIsHeld
+                          ? providerCanStartHeldNextJob
+                            ? t("next_job_ready_hint")
+                            : t("next_job_waiting_hint")
+                          : showProviderQueuedOfferSheet
+                            ? t("new_request_banner_collapse_hint")
+                            : t("new_request_banner_hint")}
+                      </p>
+                    </div>
+                    <div className="flex flex-shrink-0 items-center gap-2">
                       {!bannerIsHeld ? (
-                        <div className="text-lg font-bold text-green-600 tabular-nums">
+                        <div className="rounded-xl bg-green-500 px-2.5 py-1.5 text-sm font-bold tabular-nums text-white">
                           {providerQueuedOfferTimer}s
                         </div>
                       ) : null}
+                      {showProviderQueuedOfferSheet ? (
+                        <ChevronUp className="h-5 w-5 text-gray-500" />
+                      ) : (
+                        <ChevronDown className="h-5 w-5 text-gray-500" />
+                      )}
                     </div>
+                  </div>
+                </button>
 
-                    <div className="glass-morphism space-y-3 rounded-2xl border-0 p-4">
-                      <div className="flex items-center gap-2 border-b border-white/10 pb-1 text-xs text-gray-500">
-                        <div className="flex items-center gap-1">
-                          <CategoryIcon
-                            appMode={
-                              bannerOffer.service.appMode ?? appMode
-                            }
-                            category={
-                              bannerOffer.service.categoryId ?? category
-                            }
-                            label={bannerOffer.service.category}
-                            className="h-3.5 w-3.5"
-                          />
-                          <span>{bannerOffer.service.category}</span>
+                {showProviderQueuedOfferSheet && (
+                  <div
+                    id="queued-offer-panel"
+                    className="max-h-[min(55dvh,28rem)] overflow-y-auto rounded-b-2xl border-0 border-t border-white/20 glass-morphism-strong animate-in slide-in-from-top-2 duration-200"
+                  >
+                    {!bannerIsHeld ? (
+                      <div className="shrink-0 px-4 pb-2 pt-2">
+                        <div className="flex justify-center gap-2">
+                          <div className="h-1 flex-1 overflow-hidden rounded-full bg-gray-200">
+                            <div
+                              className="h-full bg-green-500 transition-all duration-1000 ease-linear"
+                              style={{
+                                width: `${(providerQueuedOfferTimer / PROVIDER_OFFER_EXPIRES_SECONDS) * 100}%`,
+                              }}
+                            />
+                          </div>
                         </div>
-                        {bannerOffer.service.target ? (
-                          <>
-                            <span>•</span>
-                            <span>
-                              {bannerOffer.service.targetIcon}{" "}
-                              {bannerOffer.service.target}
-                            </span>
-                          </>
+                      </div>
+                    ) : null}
+                    <div className={cn("p-4", !bannerIsHeld && "pt-0")}>
+                      <div className="mb-4 flex items-center gap-3">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="glass-button h-8 w-8 flex-shrink-0 border-0 text-gray-700"
+                          onClick={() => setShowProviderQueuedOfferSheet(false)}
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                        <h2
+                          id="queued-offer-title"
+                          className="flex-1 text-lg font-semibold text-gray-900"
+                        >
+                          {bannerIsHeld ? t("next_job") : t("new_request")}
+                        </h2>
+                        {!bannerIsHeld ? (
+                          <div className="text-lg font-bold text-green-600 tabular-nums">
+                            {providerQueuedOfferTimer}s
+                          </div>
                         ) : null}
                       </div>
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-12 w-12 items-center justify-center rounded-xl glass-morphism border-0 text-gray-700">
-                          <CategoryIcon
-                            appMode={
-                              bannerOffer.service.appMode ?? appMode
-                            }
-                            category={
-                              bannerOffer.service.categoryId ?? category
-                            }
-                            label={bannerOffer.service.category}
-                            className="h-6 w-6"
-                          />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <h3 className="truncate font-semibold text-gray-900">
-                            {bannerOffer.service.name}
-                          </h3>
-                          <div className="flex items-center gap-2 text-sm text-gray-600">
-                            <Star className="h-3 w-3 fill-current text-yellow-500" />
-                            <span>
-                              {bannerOffer.service.rating?.toFixed(1) || "4.8"}
-                            </span>
-                            <span>•</span>
-                            <span>{bannerOffer.service.duration} min</span>
-                          </div>
-                        </div>
-                        <div className="shrink-0 text-right">
-                          <div className="text-lg font-bold text-gray-900">
-                            {formatPrice(
-                              providerOfferDisplayServicePrice(bannerOffer),
-                            )}
-                          </div>
-                        </div>
-                      </div>
 
-                      <div className="border-t border-white/20 pt-3">
-                        <div className="flex items-center gap-3">
-                          <CustomerProviderAvatar
-                            avatarUrl={bannerOffer.customer.avatarUrl}
-                            name={bannerOffer.customer.name}
-                            className="h-10 w-10"
-                            iconClassName="h-4 w-4"
-                          />
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium text-gray-900">
-                              {bannerOffer.customer.name}
-                            </p>
-                            <div className="flex items-center gap-2 text-xs text-gray-600">
-                              <Star className="h-3 w-3 fill-yellow-500 text-yellow-500" />
-                              <span>{bannerOffer.customer.rating}</span>
+                      <div className="glass-morphism space-y-3 rounded-2xl border-0 p-4">
+                        <div className="flex items-center gap-2 border-b border-white/10 pb-1 text-xs text-gray-500">
+                          <div className="flex items-center gap-1">
+                            <CategoryIcon
+                              appMode={bannerOffer.service.appMode ?? appMode}
+                              category={
+                                bannerOffer.service.categoryId ?? category
+                              }
+                              label={bannerOffer.service.category}
+                              className="h-3.5 w-3.5"
+                            />
+                            <span>{bannerOffer.service.category}</span>
+                          </div>
+                          {bannerOffer.service.target ? (
+                            <>
                               <span>•</span>
                               <span>
-                                {language === "en" ? "Code" : "Kode"}:{" "}
-                                {providerMatchCode}
+                                {bannerOffer.service.targetIcon}{" "}
+                                {bannerOffer.service.target}
                               </span>
+                            </>
+                          ) : null}
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-12 w-12 items-center justify-center rounded-xl glass-morphism border-0 text-gray-700">
+                            <CategoryIcon
+                              appMode={bannerOffer.service.appMode ?? appMode}
+                              category={
+                                bannerOffer.service.categoryId ?? category
+                              }
+                              label={bannerOffer.service.category}
+                              className="h-6 w-6"
+                            />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <h3 className="truncate font-semibold text-gray-900">
+                              {bannerOffer.service.name}
+                            </h3>
+                            <div className="flex items-center gap-2 text-sm text-gray-600">
+                              <Star className="h-3 w-3 fill-current text-yellow-500" />
+                              <span>
+                                {bannerOffer.service.rating?.toFixed(1) ||
+                                  "4.8"}
+                              </span>
+                              <span>•</span>
+                              <span>{bannerOffer.service.duration} min</span>
+                            </div>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <div className="text-lg font-bold text-gray-900">
+                              {formatPrice(
+                                providerOfferDisplayServicePrice(bannerOffer),
+                              )}
                             </div>
                           </div>
                         </div>
-                      </div>
 
-                      {bannerOffer.addonLines.length > 0 && (
                         <div className="border-t border-white/20 pt-3">
-                          <h4 className="mb-2 text-sm font-medium text-gray-700">
-                            {t("addons_label")}
-                          </h4>
-                          <div className="space-y-1">
-                            {bannerOffer.addonLines.map((addon) => (
-                              <div
-                                key={addon.id}
-                                className="flex items-center justify-between text-sm"
-                              >
-                                <span className="text-gray-600">
-                                  {addon.name}
-                                </span>
-                                <span className="font-medium text-green-600">
-                                  +{formatPrice(addon.price)}
+                          <div className="flex items-center gap-3">
+                            <CustomerProviderAvatar
+                              avatarUrl={bannerOffer.customer.avatarUrl}
+                              name={bannerOffer.customer.name}
+                              className="h-10 w-10"
+                              iconClassName="h-4 w-4"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-medium text-gray-900">
+                                {bannerOffer.customer.name}
+                              </p>
+                              <div className="flex items-center gap-2 text-xs text-gray-600">
+                                <Star className="h-3 w-3 fill-yellow-500 text-yellow-500" />
+                                <span>{bannerOffer.customer.rating}</span>
+                                <span>•</span>
+                                <span>
+                                  {language === "en" ? "Code" : "Kode"}:{" "}
+                                  {providerMatchCode}
                                 </span>
                               </div>
-                            ))}
+                            </div>
                           </div>
                         </div>
-                      )}
 
-                      <div className="space-y-2 border-t border-white/20 pt-3 text-sm">
-                        <div className="flex items-center justify-between">
-                          <span className="text-gray-600">{t("location")}</span>
-                          <span className="font-medium text-gray-900">
-                            {bannerOffer.mode === "home"
-                              ? t("delivery")
-                              : t("at_provider")}
-                          </span>
-                        </div>
-                        {bannerOffer.mode === "home" && (
-                          <>
-                            <div className="flex items-center justify-between">
-                              <span className="text-gray-600">
-                                {t("distance")}
-                              </span>
-                              <span className="font-medium text-gray-900">
-                                {bannerOffer.location.distance}
-                              </span>
+                        {bannerOffer.addonLines.length > 0 && (
+                          <div className="border-t border-white/20 pt-3">
+                            <h4 className="mb-2 text-sm font-medium text-gray-700">
+                              {t("addons_label")}
+                            </h4>
+                            <div className="space-y-1">
+                              {bannerOffer.addonLines.map((addon) => (
+                                <div
+                                  key={addon.id}
+                                  className="flex items-center justify-between text-sm"
+                                >
+                                  <span className="text-gray-600">
+                                    {addon.name}
+                                  </span>
+                                  <span className="font-medium text-green-600">
+                                    +{formatPrice(addon.price)}
+                                  </span>
+                                </div>
+                              ))}
                             </div>
-                            <div className="flex items-center justify-between">
-                              <span className="text-gray-600">
-                                {t("delivery_fee")}
-                              </span>
-                              <span className="font-medium text-green-600">
-                                +
-                                {formatPrice(
-                                  providerOfferDeliveryFee(bannerOffer),
-                                )}
-                              </span>
-                            </div>
-                          </>
+                          </div>
                         )}
-                        <p className="text-xs text-gray-600">
-                          {bannerOffer.location.address}
-                        </p>
+
+                        <div className="space-y-2 border-t border-white/20 pt-3 text-sm">
+                          <div className="flex items-center justify-between">
+                            <span className="text-gray-600">
+                              {t("location")}
+                            </span>
+                            <span className="font-medium text-gray-900">
+                              {bannerOffer.mode === "home"
+                                ? t("delivery")
+                                : t("at_provider")}
+                            </span>
+                          </div>
+                          {bannerOffer.mode === "home" && (
+                            <>
+                              <div className="flex items-center justify-between">
+                                <span className="text-gray-600">
+                                  {t("distance")}
+                                </span>
+                                <span className="font-medium text-gray-900">
+                                  {bannerOffer.location.distance}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-gray-600">
+                                  {t("delivery_fee")}
+                                </span>
+                                <span className="font-medium text-green-600">
+                                  +
+                                  {formatPrice(
+                                    providerOfferDeliveryFee(bannerOffer),
+                                  )}
+                                </span>
+                              </div>
+                            </>
+                          )}
+                          <p className="text-xs text-gray-600">
+                            {bannerOffer.location.address}
+                          </p>
+                        </div>
+
+                        <div className="border-t border-white/20 pt-3">
+                          <div className="flex items-center justify-between text-base">
+                            <span className="font-semibold text-gray-800">
+                              {t("total")}
+                            </span>
+                            <span className="font-bold text-green-600 text-lg">
+                              {formatPrice(
+                                providerOfferOrderTotal(bannerOffer),
+                              )}
+                            </span>
+                          </div>
+                        </div>
                       </div>
 
-                      <div className="border-t border-white/20 pt-3">
-                        <div className="flex items-center justify-between text-base">
-                          <span className="font-semibold text-gray-800">
-                            {t("total")}
-                          </span>
-                          <span className="font-bold text-green-600 text-lg">
-                            {formatPrice(providerOfferOrderTotal(bannerOffer))}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {bannerIsHeld ? (
-                      <Button
-                        type="button"
-                        disabled={!providerCanStartHeldNextJob}
-                        className={cn(
-                          "mt-4 h-12 w-full rounded-xl border-0 text-lg font-semibold text-white shadow-md transition-all duration-300",
-                          providerCanStartHeldNextJob
-                            ? "bg-green-500 ring-2 ring-green-500/30 animate-pulse hover:bg-green-600 hover:scale-[1.01]"
-                            : "bg-gray-400 cursor-not-allowed opacity-70",
-                        )}
-                        onClick={() => handleStartHeldNextJob()}
-                      >
-                        {t("start_service")}
-                      </Button>
-                    ) : (
-                      <div className="mt-4 flex gap-2">
+                      {bannerIsHeld ? (
                         <Button
                           type="button"
-                          variant="outline"
-                          className="h-12 flex-1 rounded-xl border-0 glass-button text-lg font-semibold text-gray-800"
-                          onClick={() => {
-                            const offerId = providerQueuedIncomingOffer?.offerId;
-                            setProviderQueuedIncomingOffer(null);
-                            setShowProviderQueuedOfferSheet(false);
-                            if (offerId && hasSupabase) {
-                              void supabase
-                                .from("order_offers")
-                                .update({
-                                  status: "declined",
-                                  responded_at: new Date().toISOString(),
-                                })
-                                .eq("id", offerId)
-                                .eq("status", "pending");
-                            }
-                          }}
+                          disabled={!providerCanStartHeldNextJob}
+                          className={cn(
+                            "mt-4 h-12 w-full rounded-xl border-0 text-lg font-semibold text-white shadow-md transition-all duration-300",
+                            providerCanStartHeldNextJob
+                              ? "bg-green-500 ring-2 ring-green-500/30 animate-pulse hover:bg-green-600 hover:scale-[1.01]"
+                              : "bg-gray-400 cursor-not-allowed opacity-70",
+                          )}
+                          onClick={() => handleStartHeldNextJob()}
                         >
-                          {t("decline")}
+                          {t("start_service")}
                         </Button>
-                        <Button
-                          type="button"
-                          className="h-12 flex-[1.4] rounded-xl border-0 bg-green-500 text-lg font-semibold text-white shadow-md ring-2 ring-green-500/30 transition-all duration-300 animate-pulse hover:bg-green-600 hover:scale-[1.01]"
-                          onClick={async () => {
-                            if (
-                              !loggedInUser?.id ||
-                              !providerQueuedIncomingOffer?.offerId
-                            )
-                              return;
-                            const acceptedOffer = providerQueuedIncomingOffer;
-                            try {
-                              const res = await fetch("/api/orders/accept", {
-                                method: "POST",
-                                headers: {
-                                  "Content-Type": "application/json",
-                                },
-                                body: JSON.stringify({
-                                  offer_id: acceptedOffer.offerId,
-                                  provider_id: loggedInUser.id,
-                                  offer_shown_at: (() => {
-                                    const expiresMs = new Date(
-                                      String(acceptedOffer.expiresAt || ""),
-                                    ).getTime();
-                                    if (!Number.isFinite(expiresMs)) return null;
-                                    return new Date(
-                                      expiresMs - PROVIDER_OFFER_EXPIRES_MS,
-                                    ).toISOString();
-                                  })(),
-                                }),
-                              });
-                              const data = await res.json().catch(() => ({}));
-                              if (!res.ok || data?.success !== true) {
-                                setAuthError(
-                                  data?.error ||
-                                    (language === "en"
-                                      ? "Could not accept request"
-                                      : "Kunne ikke akseptere foresporsel"),
-                                );
-                                return;
-                              }
+                      ) : (
+                        <div className="mt-4 flex gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="h-12 flex-1 rounded-xl border-0 glass-button text-lg font-semibold text-gray-800"
+                            onClick={() => {
+                              const offerId =
+                                providerQueuedIncomingOffer?.offerId;
                               setProviderQueuedIncomingOffer(null);
-                              setProviderHeldNextJob(acceptedOffer);
-                              setShowProviderQueuedOfferSheet(true);
-                              setProviderReadyForNext(false);
-                              providerReadyForNextOptOutRef.current = true;
-                              const currentOrderId = String(
-                                providerIncomingOfferRef.current?.orderId || "",
-                              );
-                              if (currentOrderId && loggedInUser.id) {
-                                void persistReadyForNext(false);
+                              setShowProviderQueuedOfferSheet(false);
+                              if (offerId && hasSupabase) {
+                                void supabase
+                                  .from("order_offers")
+                                  .update({
+                                    status: "declined",
+                                    responded_at: new Date().toISOString(),
+                                  })
+                                  .eq("id", offerId)
+                                  .eq("status", "pending");
                               }
-                              toast.success(
-                                language === "en"
-                                  ? "Request accepted — start when ready"
-                                  : "Forespørsel akseptert — start når du er klar",
-                              );
-                            } catch {
-                              setAuthError(
-                                language === "en"
-                                  ? "Could not accept request"
-                                  : "Kunne ikke akseptere foresporsel",
-                              );
-                            }
-                          }}
-                        >
-                          {t("accept")}
-                        </Button>
-                      </div>
-                    )}
+                            }}
+                          >
+                            {t("decline")}
+                          </Button>
+                          <Button
+                            type="button"
+                            className="h-12 flex-[1.4] rounded-xl border-0 bg-green-500 text-lg font-semibold text-white shadow-md ring-2 ring-green-500/30 transition-all duration-300 animate-pulse hover:bg-green-600 hover:scale-[1.01]"
+                            onClick={async () => {
+                              if (
+                                !loggedInUser?.id ||
+                                !providerQueuedIncomingOffer?.offerId
+                              )
+                                return;
+                              const acceptedOffer = providerQueuedIncomingOffer;
+                              try {
+                                const res = await fetch("/api/orders/accept", {
+                                  method: "POST",
+                                  headers: {
+                                    "Content-Type": "application/json",
+                                  },
+                                  body: JSON.stringify({
+                                    offer_id: acceptedOffer.offerId,
+                                    provider_id: loggedInUser.id,
+                                    offer_shown_at: (() => {
+                                      const expiresMs = new Date(
+                                        String(acceptedOffer.expiresAt || ""),
+                                      ).getTime();
+                                      if (!Number.isFinite(expiresMs))
+                                        return null;
+                                      return new Date(
+                                        expiresMs - PROVIDER_OFFER_EXPIRES_MS,
+                                      ).toISOString();
+                                    })(),
+                                  }),
+                                });
+                                const data = await res.json().catch(() => ({}));
+                                if (!res.ok || data?.success !== true) {
+                                  setAuthError(
+                                    data?.error ||
+                                      (language === "en"
+                                        ? "Could not accept request"
+                                        : "Kunne ikke akseptere foresporsel"),
+                                  );
+                                  return;
+                                }
+                                setProviderQueuedIncomingOffer(null);
+                                setProviderHeldNextJob(acceptedOffer);
+                                setShowProviderQueuedOfferSheet(true);
+                                setProviderReadyForNext(false);
+                                providerReadyForNextOptOutRef.current = true;
+                                const currentOrderId = String(
+                                  providerIncomingOfferRef.current?.orderId ||
+                                    "",
+                                );
+                                if (currentOrderId && loggedInUser.id) {
+                                  void persistReadyForNext(false);
+                                }
+                                toast.success(
+                                  language === "en"
+                                    ? "Request accepted — start when ready"
+                                    : "Forespørsel akseptert — start når du er klar",
+                                );
+                              } catch {
+                                setAuthError(
+                                  language === "en"
+                                    ? "Could not accept request"
+                                    : "Kunne ikke akseptere foresporsel",
+                                );
+                              }
+                            }}
+                          >
+                            {t("accept")}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
-          </div>
           );
         })()}
 
@@ -14611,29 +14612,29 @@ export default function Page() {
           providerJobStep !== "waiting" &&
           Boolean(mockIncomingRequest)
         ) && (
-        <button
-          type="button"
-          disabled={locatingGps}
-          aria-label={language === "en" ? "My location" : "Min posisjon"}
-          title={language === "en" ? "My location" : "Min posisjon"}
-          onClick={() => void goToMyLocation()}
-          className="pointer-events-auto absolute z-40 flex h-11 w-11 items-center justify-center rounded-full border border-black/10 bg-white text-gray-800 shadow-md disabled:opacity-60"
-          style={{
-            right: 16,
-            bottom: isBottomSheetCompressed
-              ? userMode === "provider"
-                ? 230 // sit above the online toggle (175px)
-                : 190
-              : 360,
-          }}
-        >
-          {locatingGps ? (
-            <Loader2 className="h-5 w-5 animate-spin" />
-          ) : (
-            <LocateFixed className="h-5 w-5" strokeWidth={2.25} />
-          )}
-        </button>
-      )}
+          <button
+            type="button"
+            disabled={locatingGps}
+            aria-label={language === "en" ? "My location" : "Min posisjon"}
+            title={language === "en" ? "My location" : "Min posisjon"}
+            onClick={() => void goToMyLocation()}
+            className="pointer-events-auto absolute z-40 flex h-11 w-11 items-center justify-center rounded-full border border-black/10 bg-white text-gray-800 shadow-md disabled:opacity-60"
+            style={{
+              right: 16,
+              bottom: isBottomSheetCompressed
+                ? userMode === "provider"
+                  ? 230 // sit above the online toggle (175px)
+                  : 190
+                : 360,
+            }}
+          >
+            {locatingGps ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : (
+              <LocateFixed className="h-5 w-5" strokeWidth={2.25} />
+            )}
+          </button>
+        )}
 
       {/* Top Navigation Bar - Profile, Mode, Target all aligned - hide during active provider job */}
       {step === "map" &&
@@ -16036,7 +16037,9 @@ export default function Page() {
                       "min(calc(100dvh - var(--sheet-top-inset, 8.5rem)), 580px)",
                   }
             }
-            onTouchStart={isBottomSheetCompressed ? handleTouchStart : undefined}
+            onTouchStart={
+              isBottomSheetCompressed ? handleTouchStart : undefined
+            }
             onTouchMove={isBottomSheetCompressed ? handleTouchMove : undefined}
             onTouchEnd={isBottomSheetCompressed ? handleTouchEnd : undefined}
           >
@@ -16092,65 +16095,65 @@ export default function Page() {
                       </p>
                     </div>
                     {userMode === "customer" ? (
-                    <div className="flex flex-col items-end gap-0.5">
-                      <div className="glass-morphism rounded-full p-1 flex">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className={cn(
-                            "h-7 px-2 rounded-full font-medium border-0 transition-all duration-300 text-xs",
-                            mode === "home"
-                              ? "glass-button-active"
-                              : "glass-button text-gray-700",
-                          )}
-                          title={
-                            mode === "home"
-                              ? language === "en"
-                                ? "You are currently providing delivery."
-                                : "Du tilbyr for øyeblikket Delivery."
-                              : language === "en"
-                                ? "Switch to delivery."
-                                : "Bytt til Delivery."
-                          }
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setMode("home");
-                          }}
-                        >
-                          Delivery
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className={cn(
-                            "h-7 px-2 rounded-full font-medium border-0 transition-all duration-300 text-xs",
-                            mode === "provider"
-                              ? "glass-button-active"
-                              : "glass-button text-gray-700",
-                          )}
-                          title={
-                            mode === "provider"
-                              ? language === "en"
-                                ? "You are currently providing at provider."
-                                : "Du tilbyr for øyeblikket hos tilbyder."
-                              : language === "en"
-                                ? "Switch to at provider."
-                                : "Bytt til hos tilbyder."
-                          }
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setMode("provider");
-                          }}
-                        >
-                          {t("at_provider")}
-                        </Button>
+                      <div className="flex flex-col items-end gap-0.5">
+                        <div className="glass-morphism rounded-full p-1 flex">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className={cn(
+                              "h-7 px-2 rounded-full font-medium border-0 transition-all duration-300 text-xs",
+                              mode === "home"
+                                ? "glass-button-active"
+                                : "glass-button text-gray-700",
+                            )}
+                            title={
+                              mode === "home"
+                                ? language === "en"
+                                  ? "You are currently providing delivery."
+                                  : "Du tilbyr for øyeblikket Delivery."
+                                : language === "en"
+                                  ? "Switch to delivery."
+                                  : "Bytt til Delivery."
+                            }
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setMode("home");
+                            }}
+                          >
+                            Delivery
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className={cn(
+                              "h-7 px-2 rounded-full font-medium border-0 transition-all duration-300 text-xs",
+                              mode === "provider"
+                                ? "glass-button-active"
+                                : "glass-button text-gray-700",
+                            )}
+                            title={
+                              mode === "provider"
+                                ? language === "en"
+                                  ? "You are currently providing at provider."
+                                  : "Du tilbyr for øyeblikket hos tilbyder."
+                                : language === "en"
+                                  ? "Switch to at provider."
+                                  : "Bytt til hos tilbyder."
+                            }
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setMode("provider");
+                            }}
+                          >
+                            {t("at_provider")}
+                          </Button>
+                        </div>
+                        {mode === "home" && (
+                          <span className="text-xs text-gray-500">
+                            +{formatDeliveryRateLabel(language)}
+                          </span>
+                        )}
                       </div>
-                      {mode === "home" && (
-                        <span className="text-xs text-gray-500">
-                          +{formatDeliveryRateLabel(language)}
-                        </span>
-                      )}
-                    </div>
                     ) : null}
                   </div>
                 </div>
@@ -16210,59 +16213,59 @@ export default function Page() {
                         </p>
                       </div>
                       {userMode === "customer" ? (
-                      <div className="flex flex-col items-end gap-1">
-                        <div className="glass-morphism rounded-full p-1 flex">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className={cn(
-                              "h-8 px-3 rounded-full font-medium border-0 transition-all duration-300 text-sm",
-                              mode === "home"
-                                ? "glass-button-active"
-                                : "glass-button text-gray-700",
-                            )}
-                            title={
-                              mode === "home"
-                                ? language === "en"
-                                  ? "Delivery selected."
-                                  : "Delivery valgt."
-                                : language === "en"
-                                  ? "Switch to delivery."
-                                  : "Bytt til Delivery."
-                            }
-                            onClick={() => setMode("home")}
-                          >
-                            Delivery
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className={cn(
-                              "h-8 px-3 rounded-full font-medium border-0 transition-all duration-300 text-sm",
-                              mode === "provider"
-                                ? "glass-button-active"
-                                : "glass-button text-gray-700",
-                            )}
-                            title={
-                              mode === "provider"
-                                ? language === "en"
-                                  ? "At provider selected."
-                                  : "Hos tilbyder valgt."
-                                : language === "en"
-                                  ? "Switch to at provider."
-                                  : "Bytt til hos tilbyder."
-                            }
-                            onClick={() => setMode("provider")}
-                          >
-                            {t("at_provider")}
-                          </Button>
+                        <div className="flex flex-col items-end gap-1">
+                          <div className="glass-morphism rounded-full p-1 flex">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className={cn(
+                                "h-8 px-3 rounded-full font-medium border-0 transition-all duration-300 text-sm",
+                                mode === "home"
+                                  ? "glass-button-active"
+                                  : "glass-button text-gray-700",
+                              )}
+                              title={
+                                mode === "home"
+                                  ? language === "en"
+                                    ? "Delivery selected."
+                                    : "Delivery valgt."
+                                  : language === "en"
+                                    ? "Switch to delivery."
+                                    : "Bytt til Delivery."
+                              }
+                              onClick={() => setMode("home")}
+                            >
+                              Delivery
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className={cn(
+                                "h-8 px-3 rounded-full font-medium border-0 transition-all duration-300 text-sm",
+                                mode === "provider"
+                                  ? "glass-button-active"
+                                  : "glass-button text-gray-700",
+                              )}
+                              title={
+                                mode === "provider"
+                                  ? language === "en"
+                                    ? "At provider selected."
+                                    : "Hos tilbyder valgt."
+                                  : language === "en"
+                                    ? "Switch to at provider."
+                                    : "Bytt til hos tilbyder."
+                              }
+                              onClick={() => setMode("provider")}
+                            >
+                              {t("at_provider")}
+                            </Button>
+                          </div>
+                          {mode === "home" && (
+                            <span className="text-xs text-gray-500">
+                              +{formatDeliveryRateLabel(language)}
+                            </span>
+                          )}
                         </div>
-                        {mode === "home" && (
-                          <span className="text-xs text-gray-500">
-                            +{formatDeliveryRateLabel(language)}
-                          </span>
-                        )}
-                      </div>
                       ) : null}
                     </div>
                   </div>
@@ -16271,564 +16274,571 @@ export default function Page() {
                 {/* Scrollable service list — header above stays put */}
                 <div className="relative min-h-0 flex-1">
                   <div className="absolute inset-0 overflow-y-auto overscroll-contain touch-pan-y px-4 space-y-2 py-2">
-                  {visibleServices.length > 0 ? (
-                    visibleServices.map((style, index) => {
-                      const isExpanded = expandedStyleId === style.id;
-                      const styleVariants = serviceIdVariantsForDashboard(
-                        style.id,
-                      );
-                      const matchedRegisteredServiceId =
-                        registeredServices.find((id) =>
+                    {visibleServices.length > 0 ? (
+                      visibleServices.map((style, index) => {
+                        const isExpanded = expandedStyleId === style.id;
+                        const styleVariants = serviceIdVariantsForDashboard(
+                          style.id,
+                        );
+                        const matchedRegisteredServiceId =
+                          registeredServices.find((id) =>
+                            styleVariants.includes(normalizeServiceId(id)),
+                          ) || null;
+                        const isStyleOnline = onlineServices.some((id) =>
                           styleVariants.includes(normalizeServiceId(id)),
-                        ) || null;
-                      const isStyleOnline = onlineServices.some((id) =>
-                        styleVariants.includes(normalizeServiceId(id)),
-                      );
-                      const canProviderUseService =
-                        userMode !== "provider" ||
-                        Boolean(matchedRegisteredServiceId);
-                      const addonsTotal = selectedAddons.reduce(
-                        (sum, id) =>
-                          sum +
-                          (currentAddons.find((a) => a.id === id)?.price || 0),
-                        0,
-                      );
-                      const cardServicePrice =
-                        userMode === "customer"
-                          ? customerServiceDisplayPrice(style)
-                          : Number(style.price) || 0;
-                      const basePrice =
-                        cardServicePrice +
-                        (isExpanded && userMode === "customer"
-                          ? addonsTotal
-                          : 0);
-                      const totalPrice = calculateStylePrice(style); // includes delivery fee for final calculation
-                      const stylePricingServiceId = bookingPricingServiceId(style);
-                      const customerDemandTier =
-                        userMode === "customer"
-                          ? customerDemandTierFromPrices(
-                              stylePricingServiceId,
-                              dynamicPrices,
-                            )
-                          : null;
-                      const providerDemandTier =
-                        userMode === "provider"
-                          ? providerDemandTierFromPrices(
-                              stylePricingServiceId,
-                              dynamicPrices,
-                            )
-                          : null;
-                      const displayAvailability =
-                        userMode === "provider"
-                          ? providerDemandTier
-                            ? tierShortLabel(
-                                providerDemandTier,
-                                "provider",
-                                language === "en" ? "en" : "no",
+                        );
+                        const canProviderUseService =
+                          userMode !== "provider" ||
+                          Boolean(matchedRegisteredServiceId);
+                        const addonsTotal = selectedAddons.reduce(
+                          (sum, id) =>
+                            sum +
+                            (currentAddons.find((a) => a.id === id)?.price ||
+                              0),
+                          0,
+                        );
+                        const cardServicePrice =
+                          userMode === "customer"
+                            ? customerServiceDisplayPrice(style)
+                            : Number(style.price) || 0;
+                        const basePrice =
+                          cardServicePrice +
+                          (isExpanded && userMode === "customer"
+                            ? addonsTotal
+                            : 0);
+                        const totalPrice = calculateStylePrice(style); // includes delivery fee for final calculation
+                        const stylePricingServiceId =
+                          bookingPricingServiceId(style);
+                        const customerDemandTier =
+                          userMode === "customer"
+                            ? customerDemandTierFromPrices(
+                                stylePricingServiceId,
+                                dynamicPrices,
                               )
-                            : language === "en"
-                              ? "Loading demand…"
-                              : "Laster etterspørsel…"
-                          : userMode === "customer"
-                            ? customerDemandTier
+                            : null;
+                        const providerDemandTier =
+                          userMode === "provider"
+                            ? providerDemandTierFromPrices(
+                                stylePricingServiceId,
+                                dynamicPrices,
+                              )
+                            : null;
+                        const displayAvailability =
+                          userMode === "provider"
+                            ? providerDemandTier
                               ? tierShortLabel(
-                                  customerDemandTier,
-                                  "customer",
+                                  providerDemandTier,
+                                  "provider",
                                   language === "en" ? "en" : "no",
                                 )
                               : language === "en"
-                                ? "Loading prices…"
-                                : "Laster priser…"
-                            : style.availability;
-                      const statusTier =
-                        userMode === "provider"
-                          ? providerDemandTier
-                          : customerDemandTier;
-                      const skillModeKey = normalizeServiceId(
-                        matchedRegisteredServiceId || style.id,
-                      );
-                      const skillDeliveryMode =
-                        providerSkillModes[skillModeKey] ||
-                        providerSkillModes[normalizeServiceId(style.id)] ||
-                        "both";
-                      const cardDimmed =
-                        userMode === "customer" && statusTier === "closed";
+                                ? "Loading demand…"
+                                : "Laster etterspørsel…"
+                            : userMode === "customer"
+                              ? customerDemandTier
+                                ? tierShortLabel(
+                                    customerDemandTier,
+                                    "customer",
+                                    language === "en" ? "en" : "no",
+                                  )
+                                : language === "en"
+                                  ? "Loading prices…"
+                                  : "Laster priser…"
+                              : style.availability;
+                        const statusTier =
+                          userMode === "provider"
+                            ? providerDemandTier
+                            : customerDemandTier;
+                        const skillModeKey = normalizeServiceId(
+                          matchedRegisteredServiceId || style.id,
+                        );
+                        const skillDeliveryMode =
+                          providerSkillModes[skillModeKey] ||
+                          providerSkillModes[normalizeServiceId(style.id)] ||
+                          "both";
+                        const cardDimmed =
+                          userMode === "customer" && statusTier === "closed";
 
-                      return (
-                        <div
-                          key={style.id}
-                          className={cn(
-                            "glass-morphism rounded-xl overflow-hidden border-0",
-                            cardDimmed && "opacity-50",
-                          )}
-                        >
-                          {/* Compact card */}
+                        return (
                           <div
-                            role="button"
-                            tabIndex={0}
-                            className="w-full p-3 text-left transition-all duration-300 hover:bg-white/10"
-                            onClick={() => {
-                              if (isExpanded) {
-                                setExpandedStyleId(null);
-                              } else {
-                                setExpandedStyleId(style.id);
-                              }
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === " ") {
-                                e.preventDefault();
+                            key={style.id}
+                            className={cn(
+                              "glass-morphism rounded-xl overflow-hidden border-0",
+                              cardDimmed && "opacity-50",
+                            )}
+                          >
+                            {/* Compact card */}
+                            <div
+                              role="button"
+                              tabIndex={0}
+                              className="w-full p-3 text-left transition-all duration-300 hover:bg-white/10"
+                              onClick={() => {
                                 if (isExpanded) {
                                   setExpandedStyleId(null);
                                 } else {
                                   setExpandedStyleId(style.id);
                                 }
-                              }
-                            }}
-                          >
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-3">
-                                {/* Category-specific icon */}
-                                <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-[#F3F4F2] border-0 text-gray-700">
-                                  <CategoryIcon
-                                    appMode={appMode}
-                                    category={category}
-                                    label={activeCategory?.label}
-                                    className="h-5 w-5"
-                                  />
-                                </div>
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  if (isExpanded) {
+                                    setExpandedStyleId(null);
+                                  } else {
+                                    setExpandedStyleId(style.id);
+                                  }
+                                }
+                              }}
+                            >
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                  {/* Category-specific icon */}
+                                  <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-[#F3F4F2] border-0 text-gray-700">
+                                    <CategoryIcon
+                                      appMode={appMode}
+                                      category={category}
+                                      label={activeCategory?.label}
+                                      className="h-5 w-5"
+                                    />
+                                  </div>
 
-                                <div className="flex-1">
-                                  <div className="flex items-center gap-2">
-                                    <h3 className="font-medium text-gray-900 text-sm">
-                                      {style.name}
-                                    </h3>
-                                    {appMode === "vehicle" && (
-                                      <span className="text-sm">
-                                        {resolveTargetIcon(
-                                          normalizeCatalogTargetKey(target),
-                                          MODE_TARGETS[appMode] || [],
-                                        )}
-                                      </span>
-                                    )}
-                                    {style.tags.map((tag: string) => (
-                                      <span
-                                        key={tag}
-                                        className="px-2 py-0.5 glass-morphism text-gray-700 text-xs font-medium rounded-full border-0"
-                                      >
-                                        {tag}
-                                      </span>
-                                    ))}
-                                  </div>
-                                  <div className="flex items-center gap-2 text-xs text-gray-600 mt-1">
-                                    <span
-                                      className={cn(
-                                        "flex items-center gap-1",
-                                        statusTier
-                                          ? tierTextClass(statusTier)
-                                          : "text-gray-500",
+                                  <div className="flex-1">
+                                    <div className="flex items-center gap-2">
+                                      <h3 className="font-medium text-gray-900 text-sm">
+                                        {style.name}
+                                      </h3>
+                                      {appMode === "vehicle" && (
+                                        <span className="text-sm">
+                                          {resolveTargetIcon(
+                                            normalizeCatalogTargetKey(target),
+                                            MODE_TARGETS[appMode] || [],
+                                          )}
+                                        </span>
                                       )}
-                                    >
-                                      <div
+                                      {style.tags.map((tag: string) => (
+                                        <span
+                                          key={tag}
+                                          className="px-2 py-0.5 glass-morphism text-gray-700 text-xs font-medium rounded-full border-0"
+                                        >
+                                          {tag}
+                                        </span>
+                                      ))}
+                                    </div>
+                                    <div className="flex items-center gap-2 text-xs text-gray-600 mt-1">
+                                      <span
                                         className={cn(
-                                          "w-1.5 h-1.5 rounded-full",
+                                          "flex items-center gap-1",
                                           statusTier
-                                            ? demandTierDotClass(statusTier)
-                                            : "bg-gray-300",
-                                          userMode === "provider" &&
-                                            statusTier === "green" &&
-                                            "animate-pulse",
-                                        )}
-                                      />
-                                      {displayAvailability}
-                                    </span>
-                                  </div>
-                                  {userMode === "provider" &&
-                                  canProviderUseService ? (
-                                    <div
-                                      className="mt-2 flex items-center gap-1.5"
-                                      onClick={(e) => e.stopPropagation()}
-                                      onKeyDown={(e) => e.stopPropagation()}
-                                    >
-                                      <div
-                                        className={cn(
-                                          "glass-morphism rounded-full p-0.5 flex",
-                                          skillDeliveryMode === "both" &&
-                                            "opacity-40",
+                                            ? tierTextClass(statusTier)
+                                            : "text-gray-500",
                                         )}
                                       >
+                                        <div
+                                          className={cn(
+                                            "w-1.5 h-1.5 rounded-full",
+                                            statusTier
+                                              ? demandTierDotClass(statusTier)
+                                              : "bg-gray-300",
+                                            userMode === "provider" &&
+                                              statusTier === "green" &&
+                                              "animate-pulse",
+                                          )}
+                                        />
+                                        {displayAvailability}
+                                      </span>
+                                    </div>
+                                    {userMode === "provider" &&
+                                    canProviderUseService ? (
+                                      <div
+                                        className="mt-2 flex items-center gap-1.5"
+                                        onClick={(e) => e.stopPropagation()}
+                                        onKeyDown={(e) => e.stopPropagation()}
+                                      >
+                                        <div
+                                          className={cn(
+                                            "glass-morphism rounded-full p-0.5 flex",
+                                            skillDeliveryMode === "both" &&
+                                              "opacity-40",
+                                          )}
+                                        >
+                                          <button
+                                            type="button"
+                                            className={cn(
+                                              "h-6 px-2 rounded-full text-[10px] font-medium transition-all",
+                                              skillDeliveryMode === "home"
+                                                ? "bg-white text-gray-900 shadow-sm"
+                                                : "text-gray-600",
+                                            )}
+                                            onClick={() =>
+                                              void setProviderSkillModePersisted(
+                                                matchedRegisteredServiceId ||
+                                                  style.id,
+                                                "home",
+                                              )
+                                            }
+                                          >
+                                            Delivery
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className={cn(
+                                              "h-6 px-2 rounded-full text-[10px] font-medium transition-all",
+                                              skillDeliveryMode === "provider"
+                                                ? "bg-white text-gray-900 shadow-sm"
+                                                : "text-gray-600",
+                                            )}
+                                            onClick={() =>
+                                              void setProviderSkillModePersisted(
+                                                matchedRegisteredServiceId ||
+                                                  style.id,
+                                                "provider",
+                                              )
+                                            }
+                                          >
+                                            {t("at_provider")}
+                                          </button>
+                                        </div>
                                         <button
                                           type="button"
                                           className={cn(
-                                            "h-6 px-2 rounded-full text-[10px] font-medium transition-all",
-                                            skillDeliveryMode === "home"
-                                              ? "bg-white text-gray-900 shadow-sm"
-                                              : "text-gray-600",
+                                            "h-6 px-2 rounded-full text-[10px] font-medium border transition-all",
+                                            skillDeliveryMode === "both"
+                                              ? "bg-green-500 text-white border-green-500"
+                                              : "bg-white/50 text-gray-600 border-white/40",
                                           )}
                                           onClick={() =>
                                             void setProviderSkillModePersisted(
                                               matchedRegisteredServiceId ||
                                                 style.id,
-                                              "home",
+                                              "both",
                                             )
                                           }
                                         >
-                                          Delivery
-                                        </button>
-                                        <button
-                                          type="button"
-                                          className={cn(
-                                            "h-6 px-2 rounded-full text-[10px] font-medium transition-all",
-                                            skillDeliveryMode === "provider"
-                                              ? "bg-white text-gray-900 shadow-sm"
-                                              : "text-gray-600",
-                                          )}
-                                          onClick={() =>
-                                            void setProviderSkillModePersisted(
-                                              matchedRegisteredServiceId ||
-                                                style.id,
-                                              "provider",
-                                            )
-                                          }
-                                        >
-                                          {t("at_provider")}
+                                          {language === "en" ? "Both" : "Begge"}
                                         </button>
                                       </div>
+                                    ) : null}
+                                  </div>
+                                </div>
+
+                                <div className="text-right flex items-center gap-2">
+                                  {userMode === "provider" ? (
+                                    /* Online toggle for provider - locked if not registered */
+                                    canProviderUseService ? (
                                       <button
-                                        type="button"
                                         className={cn(
-                                          "h-6 px-2 rounded-full text-[10px] font-medium border transition-all",
-                                          skillDeliveryMode === "both"
-                                            ? "bg-green-500 text-white border-green-500"
-                                            : "bg-white/50 text-gray-600 border-white/40",
+                                          "w-12 h-7 rounded-full transition-all duration-300 relative touch-manipulation",
+                                          isStyleOnline
+                                            ? "bg-green-500"
+                                            : "bg-gray-300",
                                         )}
-                                        onClick={() =>
-                                          void setProviderSkillModePersisted(
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          const nextActive = !isStyleOnline;
+                                          void toggleProviderSkillActivePersisted(
                                             matchedRegisteredServiceId ||
                                               style.id,
-                                            "both",
-                                          )
+                                            nextActive,
+                                          );
+                                        }}
+                                        onTouchStart={(e) =>
+                                          e.stopPropagation()
                                         }
+                                        onTouchMove={(e) => e.stopPropagation()}
                                       >
-                                        {language === "en" ? "Both" : "Begge"}
+                                        <div
+                                          className={cn(
+                                            "absolute top-1 w-5 h-5 bg-white rounded-full shadow transition-all duration-300 pointer-events-none",
+                                            isStyleOnline
+                                              ? "right-1"
+                                              : "left-1",
+                                          )}
+                                        />
                                       </button>
-                                    </div>
-                                  ) : null}
-                                </div>
-                              </div>
-
-                              <div className="text-right flex items-center gap-2">
-                                {userMode === "provider" ? (
-                                  /* Online toggle for provider - locked if not registered */
-                                  canProviderUseService ? (
-                                    <button
-                                      className={cn(
-                                        "w-12 h-7 rounded-full transition-all duration-300 relative touch-manipulation",
-                                        isStyleOnline
-                                          ? "bg-green-500"
-                                          : "bg-gray-300",
-                                      )}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        e.preventDefault();
-                                        const nextActive = !isStyleOnline;
-                                        void toggleProviderSkillActivePersisted(
-                                          matchedRegisteredServiceId ||
-                                            style.id,
-                                          nextActive,
-                                        );
-                                      }}
-                                      onTouchStart={(e) => e.stopPropagation()}
-                                      onTouchMove={(e) => e.stopPropagation()}
-                                    >
+                                    ) : (
+                                      /* Locked - not registered */
+                                      <button
+                                        type="button"
+                                        className="flex items-center gap-1.5 text-gray-400 hover:text-gray-600"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          setSkillsFocusServiceId(style.id);
+                                          setCurrentPage("skills");
+                                        }}
+                                      >
+                                        <Lock className="h-4 w-4" />
+                                        <span className="text-xs">
+                                          {t("add_to_skills")}
+                                        </span>
+                                      </button>
+                                    )
+                                  ) : (
+                                    /* Price stays visible even when no providers are nearby. */
+                                    <div className="flex items-center gap-1.5">
+                                      {customerDemandTier ? (
+                                        <span
+                                          className={cn(
+                                            "text-sm font-semibold leading-none",
+                                            tierTextClass(customerDemandTier),
+                                          )}
+                                          aria-hidden
+                                        >
+                                          {tierPriceArrow(customerDemandTier)}
+                                        </span>
+                                      ) : null}
                                       <div
                                         className={cn(
-                                          "absolute top-1 w-5 h-5 bg-white rounded-full shadow transition-all duration-300 pointer-events-none",
-                                          isStyleOnline ? "right-1" : "left-1",
+                                          "font-bold text-base tabular-nums min-w-[3.5rem] text-right",
+                                          customerBulkPricesLoading
+                                            ? "text-gray-400"
+                                            : "text-gray-900",
                                         )}
-                                      />
-                                    </button>
-                                  ) : (
-                                    /* Locked - not registered */
-                                    <button
-                                      type="button"
-                                      className="flex items-center gap-1.5 text-gray-400 hover:text-gray-600"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        e.preventDefault();
-                                        setSkillsFocusServiceId(style.id);
-                                        setCurrentPage("skills");
-                                      }}
-                                    >
-                                      <Lock className="h-4 w-4" />
-                                      <span className="text-xs">
-                                        {t("add_to_skills")}
-                                      </span>
-                                    </button>
-                                  )
-                                ) : (
-                                  /* Price stays visible even when no providers are nearby. */
-                                  <div className="flex items-center gap-1.5">
-                                    {customerDemandTier ? (
-                                      <span
-                                        className={cn(
-                                          "text-sm font-semibold leading-none",
-                                          tierTextClass(customerDemandTier),
-                                        )}
-                                        aria-hidden
                                       >
-                                        {tierPriceArrow(customerDemandTier)}
-                                      </span>
-                                    ) : null}
-                                    <div
-                                      className={cn(
-                                        "font-bold text-base tabular-nums min-w-[3.5rem] text-right",
-                                        customerBulkPricesLoading
-                                          ? "text-gray-400"
-                                          : "text-gray-900",
-                                      )}
-                                    >
-                                      {customerBulkPricesLoading
-                                        ? "···"
-                                        : formatPrice(basePrice)}
+                                        {customerBulkPricesLoading
+                                          ? "···"
+                                          : formatPrice(basePrice)}
+                                      </div>
+                                    </div>
+                                  )}
+                                  {isExpanded ? (
+                                    <ChevronUp className="h-4 w-4 text-gray-400" />
+                                  ) : (
+                                    <ChevronDown className="h-4 w-4 text-gray-400" />
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Expanded details - minimalist */}
+                            {isExpanded && (
+                              <div className="border-t border-white/20 p-3 space-y-3">
+                                {/* Description and details */}
+                                <div>
+                                  <p className="text-xs text-gray-600 mb-2">
+                                    {style.description}
+                                  </p>
+                                  <div className="flex items-center gap-3 text-xs text-gray-600">
+                                    <div className="flex items-center gap-1">
+                                      <Clock className="h-3 w-3" />
+                                      <span>{style.duration} min</span>
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      <Star className="h-3 w-3 fill-current text-yellow-500" />
+                                      <span>{style.rating.toFixed(1)}</span>
+                                    </div>
+                                    <span>
+                                      {style.bookings.toLocaleString()}{" "}
+                                      {language === "en"
+                                        ? "bookings"
+                                        : "bestillinger"}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Dynamic Add-ons based on category */}
+                                {currentAddons.length > 0 && (
+                                  <div>
+                                    <h4 className="font-medium text-gray-900 mb-2 text-sm">
+                                      {t("addons")}
+                                    </h4>
+                                    <div className="space-y-1">
+                                      {currentAddons.map((addon) => {
+                                        const isSelected =
+                                          selectedAddons.includes(addon.id);
+                                        return (
+                                          <button
+                                            key={addon.id}
+                                            className={cn(
+                                              "w-full p-2 rounded-lg text-left transition-all duration-200 text-xs glass-morphism border-0",
+                                              isSelected
+                                                ? "bg-green-500/20 text-green-800"
+                                                : "text-gray-700 hover:bg-white/10",
+                                            )}
+                                            onClick={() => {
+                                              setSelectedAddons((prev) =>
+                                                prev.includes(addon.id)
+                                                  ? prev.filter(
+                                                      (id) => id !== addon.id,
+                                                    )
+                                                  : [...prev, addon.id],
+                                              );
+                                            }}
+                                          >
+                                            <div className="flex items-center justify-between">
+                                              <div className="flex items-center gap-2">
+                                                <div
+                                                  className={cn(
+                                                    "w-4 h-4 rounded-full border flex items-center justify-center",
+                                                    isSelected
+                                                      ? "bg-green-500 border-green-500"
+                                                      : "border-gray-300",
+                                                  )}
+                                                >
+                                                  {isSelected && (
+                                                    <Check className="h-2 w-2 text-white" />
+                                                  )}
+                                                </div>
+                                                <span className="font-medium">
+                                                  {addon.name}
+                                                </span>
+                                                <span className="text-gray-500">
+                                                  +{addon.time} min
+                                                </span>
+                                              </div>
+                                              <span className="font-semibold">
+                                                +{formatPrice(addon.price)}
+                                              </span>
+                                            </div>
+                                            {mode === "home" &&
+                                            isEquipmentDependentAddon(
+                                              addon.id,
+                                            ) ? (
+                                              <p className="text-[10px] text-gray-400 mt-1 pl-6">
+                                                {t("addon_home_visit_may_vary")}
+                                              </p>
+                                            ) : null}
+                                          </button>
+                                        );
+                                      })}
                                     </div>
                                   </div>
                                 )}
-                                {isExpanded ? (
-                                  <ChevronUp className="h-4 w-4 text-gray-400" />
-                                ) : (
-                                  <ChevronDown className="h-4 w-4 text-gray-400" />
-                                )}
                               </div>
-                            </div>
+                            )}
                           </div>
-
-                          {/* Expanded details - minimalist */}
-                          {isExpanded && (
-                            <div className="border-t border-white/20 p-3 space-y-3">
-                              {/* Description and details */}
-                              <div>
-                                <p className="text-xs text-gray-600 mb-2">
-                                  {style.description}
-                                </p>
-                                <div className="flex items-center gap-3 text-xs text-gray-600">
-                                  <div className="flex items-center gap-1">
-                                    <Clock className="h-3 w-3" />
-                                    <span>{style.duration} min</span>
-                                  </div>
-                                  <div className="flex items-center gap-1">
-                                    <Star className="h-3 w-3 fill-current text-yellow-500" />
-                                    <span>{style.rating.toFixed(1)}</span>
-                                  </div>
-                                  <span>
-                                    {style.bookings.toLocaleString()}{" "}
-                                    {language === "en"
-                                      ? "bookings"
-                                      : "bestillinger"}
-                                  </span>
-                                </div>
-                              </div>
-
-                              {/* Dynamic Add-ons based on category */}
-                              {currentAddons.length > 0 && (
-                                <div>
-                                  <h4 className="font-medium text-gray-900 mb-2 text-sm">
-                                    {t("addons")}
-                                  </h4>
-                                  <div className="space-y-1">
-                                    {currentAddons.map((addon) => {
-                                      const isSelected =
-                                        selectedAddons.includes(addon.id);
-                                      return (
-                                        <button
-                                          key={addon.id}
-                                          className={cn(
-                                            "w-full p-2 rounded-lg text-left transition-all duration-200 text-xs glass-morphism border-0",
-                                            isSelected
-                                              ? "bg-green-500/20 text-green-800"
-                                              : "text-gray-700 hover:bg-white/10",
-                                          )}
-                                          onClick={() => {
-                                            setSelectedAddons((prev) =>
-                                              prev.includes(addon.id)
-                                                ? prev.filter(
-                                                    (id) => id !== addon.id,
-                                                  )
-                                                : [...prev, addon.id],
-                                            );
-                                          }}
-                                        >
-                                          <div className="flex items-center justify-between">
-                                            <div className="flex items-center gap-2">
-                                              <div
-                                                className={cn(
-                                                  "w-4 h-4 rounded-full border flex items-center justify-center",
-                                                  isSelected
-                                                    ? "bg-green-500 border-green-500"
-                                                    : "border-gray-300",
-                                                )}
-                                              >
-                                                {isSelected && (
-                                                  <Check className="h-2 w-2 text-white" />
-                                                )}
-                                              </div>
-                                              <span className="font-medium">
-                                                {addon.name}
-                                              </span>
-                                              <span className="text-gray-500">
-                                                +{addon.time} min
-                                              </span>
-                                            </div>
-                                            <span className="font-semibold">
-                                              +{formatPrice(addon.price)}
-                                            </span>
-                                          </div>
-                                          {mode === "home" &&
-                                          isEquipmentDependentAddon(
-                                            addon.id,
-                                          ) ? (
-                                            <p className="text-[10px] text-gray-400 mt-1 pl-6">
-                                              {t("addon_home_visit_may_vary")}
-                                            </p>
-                                          ) : null}
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          )}
+                        );
+                      })
+                    ) : (
+                      // Coming Soon message
+                      <div className="text-center py-8 space-y-3">
+                        <div className="w-16 h-16 glass-morphism rounded-full flex items-center justify-center mx-auto border-0">
+                          <Clock className="h-8 w-8 text-gray-400" />
                         </div>
-                      );
-                    })
-                  ) : (
-                    // Coming Soon message
-                    <div className="text-center py-8 space-y-3">
-                      <div className="w-16 h-16 glass-morphism rounded-full flex items-center justify-center mx-auto border-0">
-                        <Clock className="h-8 w-8 text-gray-400" />
+                        <div>
+                          <h3 className="text-lg font-semibold text-gray-900 mb-1">
+                            {language === "en"
+                              ? "No services"
+                              : "Ingen tjenester"}
+                          </h3>
+                          <p className="text-gray-600 text-sm">
+                            {language === "en"
+                              ? "Select a different category or mode"
+                              : "Velg en annen kategori eller modus"}
+                          </p>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          className="glass-button text-gray-700 hover:bg-white/20 border-0"
+                          onClick={() => {
+                            setAppMode("beauty");
+                            setTarget("male");
+                            setCategory("haircut");
+                          }}
+                        >
+                          {language === "en" ? "Try Beauty" : "Prøv Beauty"}
+                        </Button>
                       </div>
-                      <div>
-                        <h3 className="text-lg font-semibold text-gray-900 mb-1">
-                          {language === "en"
-                            ? "No services"
-                            : "Ingen tjenester"}
-                        </h3>
-                        <p className="text-gray-600 text-sm">
-                          {language === "en"
-                            ? "Select a different category or mode"
-                            : "Velg en annen kategori eller modus"}
-                        </p>
-                      </div>
-                      <Button
-                        variant="ghost"
-                        className="glass-button text-gray-700 hover:bg-white/20 border-0"
-                        onClick={() => {
-                          setAppMode("beauty");
-                          setTarget("male");
-                          setCategory("haircut");
-                        }}
-                      >
-                        {language === "en" ? "Try Beauty" : "Prøv Beauty"}
-                      </Button>
-                    </div>
-                  )}
+                    )}
                   </div>
                 </div>
 
                 {/* Bottom section with payment and confirm - Fixed positioning - only for customer */}
-                {userMode === "customer" && (() => {
-                  const expandedStyle = expandedStyleId
-                    ? visibleServices.find((s) => s.id === expandedStyleId)
-                    : null;
-                  const expandedClosed =
-                    !!expandedStyle &&
-                    customerDemandTierFromPrices(
-                      bookingPricingServiceId(expandedStyle),
-                      dynamicPrices,
-                    ) === "closed";
-                  return (
-                  <div className="shrink-0 border-t border-white/20 p-4 space-y-2 bg-white/20 backdrop-blur-md pb-[max(1rem,env(safe-area-inset-bottom,0px))]">
-                    <div className="flex items-center justify-end">
-                      <button
-                        className="flex items-center gap-1.5 px-2 py-1 glass-morphism border-0 rounded-lg hover:bg-white/30 transition-colors"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setPaymentMethod(
-                            paymentMethod === "apple_pay"
-                              ? "card"
-                              : "apple_pay",
-                          );
-                        }}
-                      >
-                        {paymentMethod === "apple_pay" ? (
-                          <>
-                            <svg
-                              className="h-3.5 w-3.5"
-                              viewBox="0 0 24 24"
-                              fill="currentColor"
-                            >
-                              <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z" />
-                            </svg>
-                            <span className="text-xs font-medium text-gray-700">
-                              Pay
-                            </span>
-                          </>
-                        ) : (
-                          <>
-                            <svg
-                              className="h-3.5 w-3.5"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                            >
-                              <rect
-                                x="1"
-                                y="4"
-                                width="22"
-                                height="16"
-                                rx="2"
-                                ry="2"
-                              />
-                              <line x1="1" y1="10" x2="23" y2="10" />
-                            </svg>
-                            <span className="text-xs font-medium text-gray-700">
-                              {language === "no" ? "Kort" : "Card"}
-                            </span>
-                          </>
-                        )}
-                      </button>
-                    </div>
+                {userMode === "customer" &&
+                  (() => {
+                    const expandedStyle = expandedStyleId
+                      ? visibleServices.find((s) => s.id === expandedStyleId)
+                      : null;
+                    const expandedClosed =
+                      !!expandedStyle &&
+                      customerDemandTierFromPrices(
+                        bookingPricingServiceId(expandedStyle),
+                        dynamicPrices,
+                      ) === "closed";
+                    return (
+                      <div className="shrink-0 border-t border-white/20 p-4 space-y-2 bg-white/20 backdrop-blur-md pb-[max(1rem,env(safe-area-inset-bottom,0px))]">
+                        <div className="flex items-center justify-end">
+                          <button
+                            className="flex items-center gap-1.5 px-2 py-1 glass-morphism border-0 rounded-lg hover:bg-white/30 transition-colors"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPaymentMethod(
+                                paymentMethod === "apple_pay"
+                                  ? "card"
+                                  : "apple_pay",
+                              );
+                            }}
+                          >
+                            {paymentMethod === "apple_pay" ? (
+                              <>
+                                <svg
+                                  className="h-3.5 w-3.5"
+                                  viewBox="0 0 24 24"
+                                  fill="currentColor"
+                                >
+                                  <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z" />
+                                </svg>
+                                <span className="text-xs font-medium text-gray-700">
+                                  Pay
+                                </span>
+                              </>
+                            ) : (
+                              <>
+                                <svg
+                                  className="h-3.5 w-3.5"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                >
+                                  <rect
+                                    x="1"
+                                    y="4"
+                                    width="22"
+                                    height="16"
+                                    rx="2"
+                                    ry="2"
+                                  />
+                                  <line x1="1" y1="10" x2="23" y2="10" />
+                                </svg>
+                                <span className="text-xs font-medium text-gray-700">
+                                  {language === "no" ? "Kort" : "Card"}
+                                </span>
+                              </>
+                            )}
+                          </button>
+                        </div>
 
-                    {/* Confirm button - Always visible */}
-                    <Button
-                      className={cn(
-                        "w-full h-12 text-base font-semibold rounded-xl border-0 transition-all duration-300",
-                        expandedStyleId && !expandedClosed
-                          ? "bg-green-500 hover:bg-green-600 text-white"
-                          : "glass-morphism text-gray-500 cursor-not-allowed",
-                      )}
-                      disabled={!expandedStyleId || expandedClosed}
-                      onClick={() => {
-                        if (!expandedStyle || expandedClosed) return;
-                        // Clear any previous provider-matching error when starting a fresh selection.
-                        setMatchError(null);
-                        clearBookingLockState();
-                        setSelectedStyle(expandedStyle);
-                        setStep("confirm");
-                      }}
-                    >
-                      {expandedClosed
-                        ? language === "en"
-                          ? "No providers available right now"
-                          : "Ingen tilbydere tilgjengelig nå"
-                        : expandedStyleId
-                          ? t("confirm_selection")
-                          : t("select_service")}
-                    </Button>
-                  </div>
-                  );
-                })()}
+                        {/* Confirm button - Always visible */}
+                        <Button
+                          className={cn(
+                            "w-full h-12 text-base font-semibold rounded-xl border-0 transition-all duration-300",
+                            expandedStyleId && !expandedClosed
+                              ? "bg-green-500 hover:bg-green-600 text-white"
+                              : "glass-morphism text-gray-500 cursor-not-allowed",
+                          )}
+                          disabled={!expandedStyleId || expandedClosed}
+                          onClick={() => {
+                            if (!expandedStyle || expandedClosed) return;
+                            // Clear any previous provider-matching error when starting a fresh selection.
+                            setMatchError(null);
+                            clearBookingLockState();
+                            setSelectedStyle(expandedStyle);
+                            setStep("confirm");
+                          }}
+                        >
+                          {expandedClosed
+                            ? language === "en"
+                              ? "No providers available right now"
+                              : "Ingen tilbydere tilgjengelig nå"
+                            : expandedStyleId
+                              ? t("confirm_selection")
+                              : t("select_service")}
+                        </Button>
+                      </div>
+                    );
+                  })()}
               </div>
             )}
           </div>
@@ -17026,7 +17036,7 @@ export default function Page() {
                 </button>
               </div>
 
-              {/* Total price */}
+              {/* Total + card hold (home delivery authorises the 10 km ceiling). */}
               <div className="border-t border-white/20 pt-3">
                 <div className="flex items-center justify-between text-base">
                   <span className="font-semibold text-gray-800">
@@ -17036,6 +17046,22 @@ export default function Page() {
                     {formatPrice(calculateStylePrice(selectedStyle))}
                   </span>
                 </div>
+                {mode === "home" &&
+                confirmBookingReserveAmountKr != null &&
+                confirmBookingReserveAmountKr >
+                  calculateStylePrice(selectedStyle) ? (
+                  <p className="mt-1.5 text-xs text-gray-500 leading-snug">
+                    {t("card_hold_disclosure")
+                      .replace(
+                        "{quoted}",
+                        formatPrice(calculateStylePrice(selectedStyle)),
+                      )
+                      .replace(
+                        "{hold}",
+                        formatPrice(confirmBookingReserveAmountKr),
+                      )}
+                  </p>
+                ) : null}
               </div>
             </div>
 
@@ -17052,35 +17078,33 @@ export default function Page() {
                 (priceLockLoading && !priceLockId)
               }
             >
-              {isMatching
-                ? language === "en"
-                  ? "Matching..."
-                  : "Matcher..."
-                : bookingPaymentPreparing
-                  ? (
-                      <span className="inline-flex items-center justify-center gap-2">
-                        <Loader2
-                          className="h-4 w-4 shrink-0 animate-spin"
-                          aria-hidden
-                        />
-                        {language === "en"
-                          ? "Authorizing payment…"
-                          : "Autoriserer betaling…"}
-                      </span>
-                    )
-                  : priceLockLoading && !priceLockId
-                    ? (
-                        <span className="inline-flex items-center justify-center gap-2">
-                          <Loader2
-                            className="h-4 w-4 shrink-0 animate-spin"
-                            aria-hidden
-                          />
-                          {language === "en"
-                            ? "Locking price…"
-                            : "Låser pris…"}
-                        </span>
-                      )
-                    : t("confirm_booking")}
+              {isMatching ? (
+                language === "en" ? (
+                  "Matching..."
+                ) : (
+                  "Matcher..."
+                )
+              ) : bookingPaymentPreparing ? (
+                <span className="inline-flex items-center justify-center gap-2">
+                  <Loader2
+                    className="h-4 w-4 shrink-0 animate-spin"
+                    aria-hidden
+                  />
+                  {language === "en"
+                    ? "Authorizing payment…"
+                    : "Autoriserer betaling…"}
+                </span>
+              ) : priceLockLoading && !priceLockId ? (
+                <span className="inline-flex items-center justify-center gap-2">
+                  <Loader2
+                    className="h-4 w-4 shrink-0 animate-spin"
+                    aria-hidden
+                  />
+                  {language === "en" ? "Locking price…" : "Låser pris…"}
+                </span>
+              ) : (
+                t("confirm_booking")
+              )}
             </Button>
           </div>
         </div>
@@ -17378,7 +17402,10 @@ export default function Page() {
                                     : t("at_provider")}
                                   {mode === "home" &&
                                     provider?.distanceKm != null && (
-                                      <> • {provider.distanceKm.toFixed(1)} km</>
+                                      <>
+                                        {" "}
+                                        • {provider.distanceKm.toFixed(1)} km
+                                      </>
                                     )}{" "}
                                   • {formatPrice(bookedOrderDisplayTotal)}
                                 </p>
@@ -17539,8 +17566,7 @@ export default function Page() {
           userMode === "provider"
             ? mockIncomingRequest?.customer?.name ||
               (language === "en" ? "Customer" : "Kunde")
-            : provider?.name ||
-              (language === "en" ? "Provider" : "Tilbyder")
+            : provider?.name || (language === "en" ? "Provider" : "Tilbyder")
         }
         otherPartyAvatarUrl={
           userMode === "provider" ? null : provider?.avatarUrl

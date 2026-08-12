@@ -148,7 +148,11 @@ function InnerPayment({
 
   return (
     <div className="space-y-3">
-      <PaymentElement />
+      <PaymentElement
+        options={{
+          wallets: { link: "never" },
+        }}
+      />
       <AmountNote
         amount={amount}
         currency={currency}

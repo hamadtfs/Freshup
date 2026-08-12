@@ -96,7 +96,11 @@ function InnerAddCard({
   return (
     <div className="space-y-3">
       <p className="text-sm font-semibold text-foreground">{t.title}</p>
-      <PaymentElement />
+      <PaymentElement
+        options={{
+          wallets: { link: "never" },
+        }}
+      />
       {error && <div className="text-xs text-destructive">{error}</div>}
       <div className="flex gap-2">
         <Button
