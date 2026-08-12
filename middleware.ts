@@ -13,6 +13,7 @@ const APP_SUBPAGES = new Set([
   "skills",
   "chat",
   "report",
+  "admin",
 ]);
 
 function withNoIndex(res: NextResponse): NextResponse {

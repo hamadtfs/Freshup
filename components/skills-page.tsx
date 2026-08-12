@@ -1089,6 +1089,8 @@ interface SkillsPageProps {
   initialMode?: AppMode;
   initialTarget?: string;
   initialCategory?: string;
+  /** Pre-select this catalog service when opened from “Add to Skills”. */
+  initialServiceId?: string | null;
 }
 
 export default function SkillsPage({
@@ -1098,6 +1100,7 @@ export default function SkillsPage({
   initialMode,
   initialTarget,
   initialCategory,
+  initialServiceId = null,
 }: SkillsPageProps) {
   const isEn = language === "en";
   const APP_MODES = isEn ? APP_MODES_EN : APP_MODES_NO;
@@ -1461,6 +1464,30 @@ export default function SkillsPage({
     void loadSavedSkills();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providerId, initialMode, initialTarget, initialCategory]);
+
+  useEffect(() => {
+    const focusId = String(initialServiceId || "").trim();
+    if (!focusId || isLoadingSkills) return;
+    const variants = serviceIdVariantsForSkills(focusId);
+    setSelectedServices((prev) => {
+      const already = prev.some((id) =>
+        serviceIdVariantsForSkills(id).some((variant) =>
+          variants.includes(variant),
+        ),
+      );
+      if (already) return prev;
+      return [...prev, focusId];
+    });
+    setServiceRatings((prev) => {
+      const already = Object.keys(prev).some((id) =>
+        serviceIdVariantsForSkills(id).some((variant) =>
+          variants.includes(variant),
+        ),
+      );
+      if (already) return prev;
+      return { ...prev, [focusId]: prev[focusId] ?? 3 };
+    });
+  }, [initialServiceId, isLoadingSkills]);
 
   const currentCategories = useMemo(
     () => MODE_CATEGORIES[selectedMode]?.[selectedTarget] || [],

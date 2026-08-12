@@ -1,6 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/server";
 import { getUserIdFromBearer } from "@/lib/supabase/route-user";
 import { releaseOrderPayment } from "@/lib/payments/order-payment";
+import { refreshDemandZoneAt } from "@/lib/pricing/used-capacity";
 import { NextRequest, NextResponse } from "next/server";
 
 /**
@@ -23,7 +24,9 @@ export async function POST(req: NextRequest) {
 
     const { data: order, error: orderErr } = await supabase
       .from("orders")
-      .select("id, customer_id, provider_id, status")
+      .select(
+        "id, customer_id, provider_id, status, service_id, customer_lat, customer_lng",
+      )
       .eq("id", orderId)
       .maybeSingle();
     if (orderErr) throw orderErr;
@@ -76,6 +79,15 @@ export async function POST(req: NextRequest) {
     });
 
     await releaseOrderPayment(supabase, orderId);
+
+    const serviceId = String(order.service_id || "").trim();
+    const lat = Number(order.customer_lat);
+    const lng = Number(order.customer_lng);
+    if (serviceId && Number.isFinite(lat) && Number.isFinite(lng)) {
+      void refreshDemandZoneAt(supabase, serviceId, lat, lng).catch((err) =>
+        console.error("[abort-search] demand zone refresh:", err),
+      );
+    }
 
     return NextResponse.json({ ok: true, outcome: "aborted" });
   } catch (error) {

@@ -1,4 +1,5 @@
 import { recordProviderEarningForOrder } from "@/lib/payments/provider-payout";
+import { refreshDemandZoneAt } from "@/lib/pricing/used-capacity";
 import { createAdminClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
@@ -23,7 +24,7 @@ export async function POST(req: Request) {
     // Ensure only the assigned provider can complete this order.
     const { data: order, error: orderErr } = await supabase
       .from("orders")
-      .select("id, provider_id, status")
+      .select("id, provider_id, status, service_id, customer_lat, customer_lng")
       .eq("id", orderId)
       .maybeSingle();
     if (orderErr || !order) {
@@ -174,6 +175,24 @@ export async function POST(req: Request) {
       }
     } catch (e) {
       console.error("[complete_order] push notify", e);
+    }
+
+    // Clear Opptatt / demand_zones cache so the map matches live quotes (0% after complete).
+    try {
+      const serviceId = String(order.service_id || "").trim();
+      const lat = Number(order.customer_lat);
+      const lng = Number(order.customer_lng);
+      if (
+        serviceId &&
+        Number.isFinite(lat) &&
+        Number.isFinite(lng)
+      ) {
+        void refreshDemandZoneAt(supabase, serviceId, lat, lng).catch((err) =>
+          console.error("[complete_order] demand zone refresh:", err),
+        );
+      }
+    } catch (e) {
+      console.error("[complete_order] demand zone refresh setup:", e);
     }
 
     return NextResponse.json({ ok: true, captured, error: captureError });

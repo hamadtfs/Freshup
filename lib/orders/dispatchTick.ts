@@ -240,16 +240,8 @@ export async function dispatchTick(
 
       const prior = Number((order as any)?.dispatch_wave_index);
       let nextStep = Number.isFinite(prior) ? prior + 1 : 0;
-      if (nextStep > maxDueStep) {
-        results.push({
-          order_id: orderId,
-          action: "waiting_next_wave",
-          next_wave: waveMeta(nextStep),
-          latest_due_wave: maxDueStep >= 0 ? waveMeta(maxDueStep) : null,
-        });
-        continue;
-      }
-      if (nextStep >= TOTAL_STEPS) {
+
+      const cancelExhaustedSearch = async (reason: string) => {
         await supabase
           .from("orders")
           .update({
@@ -265,8 +257,48 @@ export async function dispatchTick(
           })
           .eq("id", orderId)
           .is("provider_id", null);
+        await supabase
+          .from("order_offers")
+          .update({ status: "expired" })
+          .eq("order_id", orderId)
+          .eq("status", "pending");
         await releaseOrderPayment(supabase, orderId);
-        results.push({ order_id: orderId, action: "cancelled_timeout" });
+        results.push({
+          order_id: orderId,
+          action: "cancelled_timeout",
+          reason,
+          last_wave: waveMeta(TOTAL_STEPS - 1),
+        });
+      };
+
+      // 18 waves (0–17). After the last one, never match again.
+      if (nextStep >= TOTAL_STEPS) {
+        const { data: liveOffers } = await supabase
+          .from("order_offers")
+          .select("id")
+          .eq("order_id", orderId)
+          .eq("status", "pending")
+          .gt("expires_at", lockNow)
+          .limit(1);
+        if (liveOffers?.length) {
+          results.push({
+            order_id: orderId,
+            action: "search_exhausted_waiting_offers",
+            last_wave: waveMeta(TOTAL_STEPS - 1),
+          });
+        } else {
+          await cancelExhaustedSearch("waves_exhausted");
+        }
+        continue;
+      }
+
+      if (nextStep > maxDueStep) {
+        results.push({
+          order_id: orderId,
+          action: "waiting_next_wave",
+          next_wave: waveMeta(nextStep),
+          latest_due_wave: maxDueStep >= 0 ? waveMeta(maxDueStep) : null,
+        });
         continue;
       }
 
@@ -334,6 +366,14 @@ export async function dispatchTick(
               : null,
           });
         if (matchRpcErr) {
+          // Still consume this wave so the last index cannot retry forever.
+          waveOutcomes.push({
+            wave_index: stepToRun,
+            wave_name: waveName,
+            performance_tier: perfTier,
+            batch: batch.name,
+            offers_sent: 0,
+          });
           results.push({
             order_id: orderId,
             action: "match_rpc_error",
@@ -481,6 +521,37 @@ export async function dispatchTick(
         wave_count: waveOutcomes.length,
         waves: waveOutcomes,
       });
+
+      if (lastProcessedStep >= TOTAL_STEPS - 1) {
+        const { data: liveOffers } = await supabase
+          .from("order_offers")
+          .select("id")
+          .eq("order_id", orderId)
+          .eq("status", "pending")
+          .gt("expires_at", lockNow)
+          .limit(1);
+        if (!liveOffers?.length) {
+          await supabase
+            .from("orders")
+            .update({
+              status: "cancelled",
+              cancelled_at: lockNow,
+              cancellation_reason:
+                "No providers available right now. Please try again.",
+              dispatch_wave_index: TOTAL_STEPS - 1,
+              dispatch_wave_started_at: lockNow,
+              ...batchColumnsFromWaveStep(TOTAL_STEPS - 1),
+            })
+            .eq("id", orderId)
+            .is("provider_id", null);
+          await releaseOrderPayment(supabase, orderId);
+          results[results.length - 1] = {
+            ...results[results.length - 1],
+            action: "cancelled_timeout",
+            reason: "waves_exhausted",
+          };
+        }
+      }
     } finally {
       await supabase
         .from("orders")
