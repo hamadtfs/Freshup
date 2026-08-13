@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react"
 import { ChevronLeft, Flag } from "lucide-react"
 import { createBrowserSupabaseClient } from "@/lib/supabase/client"
+import { loginToContinueCopy } from "@/lib/auth/login-required-copy"
 import {
   PROVIDER_REPORT_CATEGORIES,
   providerReportCategoryLabel,
@@ -62,7 +63,7 @@ export default function ReportProviderPage({
       const { data } = await supabase.auth.getSession()
       const token = data?.session?.access_token
       if (!token) {
-        setError(isEn ? "Please sign in again." : "Logg inn på nytt.")
+        setError(loginToContinueCopy(isEn))
         return
       }
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createAdminClient } from "@/lib/supabase/server"
 import { SERVICE_ID_ALIASES, serviceIdCandidates } from "@/lib/service-id"
+import { upsertAccountRoleGrant } from "@/lib/auth/account-role-grants"
 
 interface OnboardingPayload {
   business_name?: string
@@ -109,7 +110,7 @@ async function persistDirect(providerId: string, payload: OnboardingPayload) {
   const { data: existing, error: existingErr } = await supabase
     .from("provider_details")
     .select(
-      "business_name, description, phone, address, lat, lng, delivery_modes, default_address, default_lat, default_lng",
+      "business_name, description, phone, address, lat, lng, delivery_modes",
     )
     .eq("id", providerId)
     .maybeSingle()
@@ -143,9 +144,6 @@ async function persistDirect(providerId: string, payload: OnboardingPayload) {
         : null
   if (resolvedAddress) {
     detailPatch.address = resolvedAddress
-    detailPatch.default_address = resolvedAddress
-  } else if (existing?.default_address) {
-    detailPatch.default_address = existing.default_address
   }
 
   const resolvedLat =
@@ -163,15 +161,9 @@ async function persistDirect(providerId: string, payload: OnboardingPayload) {
 
   if (resolvedLat != null) {
     detailPatch.lat = resolvedLat
-    detailPatch.default_lat = resolvedLat
-  } else if (existing?.default_lat != null) {
-    detailPatch.default_lat = existing.default_lat
   }
   if (resolvedLng != null) {
     detailPatch.lng = resolvedLng
-    detailPatch.default_lng = resolvedLng
-  } else if (existing?.default_lng != null) {
-    detailPatch.default_lng = existing.default_lng
   }
 
   const { error: detailsErr } = await supabase
@@ -432,12 +424,7 @@ async function persistDirect(providerId: string, payload: OnboardingPayload) {
   }
 
   // Explicit provider grant (pending until admin verification).
-  await supabase.rpc("upsert_account_role_grant", {
-    p_user_id: providerId,
-    p_role: "provider",
-    p_status: "pending",
-    p_activate: false,
-  })
+  await upsertAccountRoleGrant(supabase, providerId, "provider", "pending")
 
   return {
     success: true,

@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js"
 import { writeStoredDashboardMode } from "@/lib/auth/dashboard-mode"
 import type { OAuthPendingPayload } from "@/lib/auth/oauth-pending"
 import { persistProviderOnboardingForUser } from "@/lib/auth/provider-onboarding"
+import { claimSignupRole } from "@/lib/auth/claim-signup-role"
 import {
   formatSignupPriceFailureMessage,
   saveProviderSignupCoords,
@@ -19,12 +20,19 @@ export async function completeOAuthSession(
   const metaRole = userData.user?.user_metadata?.app_role
   const role =
     pending?.role ??
-    (metaRole === "provider" || metaRole === "customer" ? metaRole : "customer")
-  writeStoredDashboardMode(userId, role)
-
-  await supabase.auth.updateUser({
-    data: { app_role: role },
-  })
+    (metaRole === "provider" || metaRole === "customer" ? metaRole : null)
+  if (role) {
+    writeStoredDashboardMode(userId, role)
+    await supabase.auth.updateUser({
+      data: { app_role: role },
+    })
+    if (pending?.role) {
+      const { data: sessionData } = await supabase.auth.getSession()
+      await claimSignupRole(pending.role, {
+        accessToken: sessionData.session?.access_token,
+      })
+    }
+  }
 
   if (role === "provider" && pending?.providerOnboarding) {
     const onboarding = pending.providerOnboarding

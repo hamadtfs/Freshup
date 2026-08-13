@@ -2,6 +2,11 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { getUserIdFromBearer } from "@/lib/supabase/route-user";
 import { isStripeConfigured } from "@/lib/payments/stripe";
 import {
+  grantAllowsAppAccess,
+  listAccountRoleGrants,
+  upsertAccountRoleGrant,
+} from "@/lib/auth/account-role-grants";
+import {
   createStripeConnectAccountLink,
   ensureStripeConnectAccount,
   formatStripeConnectStartError,
@@ -48,6 +53,16 @@ export async function POST(req: NextRequest) {
       .eq("id", providerId)
       .maybeSingle();
     if (providerLookupErr) throw providerLookupErr;
+    const grants = await listAccountRoleGrants(supabase, providerId);
+    const alreadyCustomer = grants.some(
+      (g) => g.role === "customer" && grantAllowsAppAccess(g.status),
+    );
+    // Fresh provider signup: record pending grant. Existing customers wait
+    // until onboard completes so abandoning Connect is not dual-mode.
+    if (!alreadyCustomer) {
+      await upsertAccountRoleGrant(supabase, providerId, "provider", "pending");
+    }
+
     if (!provider) {
       const now = new Date().toISOString();
       const { error: stubErr } = await supabase.from("provider_details").upsert(

@@ -85,8 +85,18 @@ function settingsLocationCacheKey(
   return `freshup.profile.settings.location.${userMode}.${userId}`;
 }
 
+function looksLikeLatLngLabel(value: string): boolean {
+  return /^-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?$/.test(value.trim());
+}
+
+/** Address the user typed — never map coordinates. */
+function typedAddress(value: unknown): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text || looksLikeLatLngLabel(text)) return "";
+  return text;
+}
+
 function locationLabel(location: SettingsLocation): string {
-  if (location.address) return location.address;
   if (typeof location.lat === "number" && typeof location.lng === "number") {
     return `${location.lat.toFixed(5)}, ${location.lng.toFixed(5)}`;
   }
@@ -131,7 +141,7 @@ export default function ProfilePage({
         name: "Name",
         phone: "Phone",
         email: "Email",
-        location: "Location",
+        location: "Address",
         addressPlaceholder: "Address",
         fetching: "Fetching...",
         settings: "Settings",
@@ -173,7 +183,7 @@ export default function ProfilePage({
       name: "Navn",
       phone: "Telefon",
       email: "E-post",
-      location: "Lokasjon",
+      location: "Adresse",
       addressPlaceholder: "Adresse",
       fetching: "Henter...",
       settings: "Innstillinger",
@@ -300,7 +310,10 @@ export default function ProfilePage({
           phone: serverContact.phone || "",
           email: serverContact.email || "",
           avatarUrl: serverContact.avatarUrl || localAvatarUrl || "",
-          address: serverContact.address || localAddress || "",
+          address:
+            typedAddress(serverContact.address) ||
+            typedAddress(localAddress) ||
+            "",
           lat: serverContact.lat ?? localLat,
           lng: serverContact.lng ?? localLng,
         };
@@ -323,7 +336,7 @@ export default function ProfilePage({
         );
 
         // Set settings location (default location for delivery)
-        let settingsAddress = serverDefaultLocation.address || "";
+        let settingsAddress = typedAddress(serverDefaultLocation.address);
         let settingsLat = toFiniteNumber(serverDefaultLocation.lat);
         let settingsLng = toFiniteNumber(serverDefaultLocation.lng);
 
@@ -398,7 +411,7 @@ export default function ProfilePage({
         phone: contact.phone,
         email: contact.email,
         avatarUrl: contact.avatarUrl,
-        address: contact.address,
+        address: typedAddress(contact.address),
       };
       if (
         typeof contact.lat === "number" &&
@@ -432,7 +445,7 @@ export default function ProfilePage({
         phone: saved.phone || prev.phone,
         email: saved.email || prev.email,
         avatarUrl: saved.avatarUrl || prev.avatarUrl,
-        address: saved.address || prev.address,
+        address: typedAddress(saved.address) || prev.address,
         lat: saved.lat ?? prev.lat,
         lng: saved.lng ?? prev.lng,
       }));
@@ -444,7 +457,7 @@ export default function ProfilePage({
           phone: saved.phone || contact.phone,
           email: saved.email || contact.email,
           avatarUrl: saved.avatarUrl || contact.avatarUrl,
-          address: saved.address || contact.address,
+          address: typedAddress(saved.address) || typedAddress(contact.address),
           lat: saved.lat ?? contact.lat,
           lng: saved.lng ?? contact.lng,
           savedAt: Date.now(),
@@ -490,7 +503,7 @@ export default function ProfilePage({
         body: JSON.stringify({
           defaultLat: settingsLocation.lat,
           defaultLng: settingsLocation.lng,
-          defaultAddress: settingsLocation.address,
+          defaultAddress: typedAddress(settingsLocation.address) || undefined,
         }),
       });
 
@@ -570,9 +583,9 @@ export default function ProfilePage({
       Number.isFinite(contact.lat) &&
       typeof contact.lng === "number" &&
       Number.isFinite(contact.lng);
-    const payload: Record<string, unknown> = {
-      address: contact.address,
-    };
+    const payload: Record<string, unknown> = {};
+    const typed = typedAddress(contact.address);
+    if (typed) payload.address = typed;
     if (hasPin) {
       payload.lat = contact.lat;
       payload.lng = contact.lng;
@@ -591,10 +604,7 @@ export default function ProfilePage({
       const savedContact = body?.contact || {};
       setContact((prev) => ({
         ...prev,
-        address:
-          typeof savedContact.address === "string"
-            ? savedContact.address
-            : prev.address,
+        address: typedAddress(savedContact.address) || prev.address,
         lat: toFiniteNumber(savedContact.lat) ?? prev.lat,
         lng: toFiniteNumber(savedContact.lng) ?? prev.lng,
       }));
@@ -610,10 +620,7 @@ export default function ProfilePage({
           const freshContact = freshBody?.contact || {};
           setContact((prev) => ({
             ...prev,
-            address:
-              typeof freshContact.address === "string"
-                ? freshContact.address
-                : prev.address,
+            address: typedAddress(freshContact.address) || prev.address,
             lat: toFiniteNumber(freshContact.lat) ?? prev.lat,
             lng: toFiniteNumber(freshContact.lng) ?? prev.lng,
           }));
@@ -808,20 +815,12 @@ export default function ProfilePage({
               ...prev,
               lat: fromGps.lat,
               lng: fromGps.lng,
-              address:
-                prev.address.trim().length > 0
-                  ? prev.address
-                  : `${fromGps.lat.toFixed(5)}, ${fromGps.lng.toFixed(5)}`,
             }));
           } else {
             setSettingsLocation((prev) => ({
               ...prev,
               lat: fromGps.lat,
               lng: fromGps.lng,
-              address:
-                prev.address.trim().length > 0
-                  ? prev.address
-                  : `${fromGps.lat.toFixed(5)}, ${fromGps.lng.toFixed(5)}`,
             }));
           }
           return;
@@ -841,16 +840,12 @@ export default function ProfilePage({
                 ...prev,
                 lat: geo.lat,
                 lng: geo.lng,
-                address:
-                  prev.address.trim().length > 0 ? prev.address : addressHint,
               }));
             } else {
               setSettingsLocation((prev) => ({
                 ...prev,
                 lat: geo.lat,
                 lng: geo.lng,
-                address:
-                  prev.address.trim().length > 0 ? prev.address : addressHint,
               }));
             }
             return;
@@ -1205,20 +1200,12 @@ export default function ProfilePage({
                       ...prev,
                       lat: pt.lat,
                       lng: pt.lng,
-                      address:
-                        prev.address.trim().length > 0
-                          ? prev.address
-                          : `${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)}`,
                     }));
                   } else {
                     setSettingsLocation((prev) => ({
                       ...prev,
                       lat: pt.lat,
                       lng: pt.lng,
-                      address:
-                        prev.address.trim().length > 0
-                          ? prev.address
-                          : `${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)}`,
                     }));
                   }
                 }}

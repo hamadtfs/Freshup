@@ -9,6 +9,7 @@ import {
   getSessionAuth,
   useConversationMessages,
 } from "@/lib/chat/use-conversation-messages"
+import { loginToContinueCopy } from "@/lib/auth/login-required-copy"
 import { useTypingIndicator } from "@/lib/chat/use-typing-indicator"
 
 type AvatarProps = {
@@ -108,7 +109,7 @@ export default function OrderChatModal({
         const auth = await getSessionAuth()
         if (!auth) {
           if (!cancelled) {
-            setBootError(isEn ? "Please sign in again." : "Logg inn på nytt.")
+            setBootError(loginToContinueCopy(isEn))
           }
           return
         }

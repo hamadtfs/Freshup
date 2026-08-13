@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ChevronLeft, Loader2, ShieldCheck } from "lucide-react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import { loginToContinueCopy } from "@/lib/auth/login-required-copy";
 import { Button } from "@/components/ui/button";
 
 type PendingProvider = {
@@ -50,7 +51,7 @@ export default function AdminVerificationsPage({
     try {
       const token = await getToken();
       if (!token) {
-        setError(isEn ? "Please sign in" : "Logg inn");
+        setError(loginToContinueCopy(isEn));
         setProviders([]);
         return;
       }

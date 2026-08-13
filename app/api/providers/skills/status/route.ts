@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from "next/server"
 import { createAdminClient } from "@/lib/supabase/server"
 import { getUserIdFromBearer } from "@/lib/supabase/route-user"
 import { resolveCanonicalService, serviceIdCandidates } from "@/lib/service-id"
-import { assertCanGoOnlineFromRow } from "@/lib/payments/provider-eligibility"
+import {
+  evaluateProviderOnlineGate,
+  providerOnlineGateMessage,
+} from "@/lib/payments/provider-eligibility"
 
 export async function POST(req: NextRequest) {
   try {
@@ -80,29 +83,14 @@ export async function POST(req: NextRequest) {
       (typeof body.is_active === "boolean" ? body.is_active : true)
 
     if (goingOnline) {
-      const { data: flags, error: flagsErr } = await supabase
-        .from("provider_details")
-        .select("stripe_payouts_enabled, admin_approved")
-        .eq("id", providerId)
-        .maybeSingle()
-      if (flagsErr) throw flagsErr
-      if (!flags) {
-        return NextResponse.json(
-          { error: "PROVIDER_NOT_FOUND" },
-          { status: 404 },
-        )
-      }
-      const gate = assertCanGoOnlineFromRow(flags)
+      const gate = await evaluateProviderOnlineGate(supabase, providerId)
       if (!gate.ok) {
         return NextResponse.json(
           {
             error: gate.error,
-            message:
-              gate.error === "ADMIN_PENDING"
-                ? "Waiting for FreshUp admin approval before you can go online."
-                : "Complete payout setup (Stripe Connect) before going online.",
+            message: providerOnlineGateMessage(gate.error),
           },
-          { status: 403 },
+          { status: gate.error === "PROVIDER_NOT_FOUND" ? 404 : 403 },
         )
       }
     }

@@ -15,7 +15,7 @@ import { NextRequest, NextResponse } from "next/server"
 
 /**
  * GET — roles this account actually has.
- * Prefers account_role_grants when present; falls back to detail rows.
+ * account_role_grants is the source of truth.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -28,14 +28,13 @@ export async function GET(req: NextRequest) {
     const grants = await listAccountRoleGrants(supabase, userId)
     const byRole = new Map(grants.map((g) => [g.role, g.status] as const))
 
-    const [{ data: provider }, { data: customer }, { data: skillRow }, { data: authUser }] =
+    const [{ data: provider }, { data: skillRow }, { data: authUser }] =
       await Promise.all([
         supabase
           .from("provider_details")
           .select("id, lat, lng, admin_approved")
           .eq("id", userId)
           .maybeSingle(),
-        supabase.from("customer_details").select("id").eq("id", userId).maybeSingle(),
         supabase
           .from("provider_skills")
           .select("id")
@@ -45,19 +44,11 @@ export async function GET(req: NextRequest) {
         supabase.auth.admin.getUserById(userId),
       ])
 
-    let customerStatus: RoleGrantStatus | null = byRole.get("customer") ?? null
-    let providerStatus: RoleGrantStatus | null = byRole.get("provider") ?? null
+    const customerStatus: RoleGrantStatus | null = byRole.get("customer") ?? null
+    const providerStatus: RoleGrantStatus | null = byRole.get("provider") ?? null
 
-    // Fill gaps from detail/skill rows:
-    // - no grant rows yet (legacy), OR
-    // - only one role was granted (e.g. customer) while provider_details/skills exist.
-    if (!customerStatus && customer?.id) {
-      customerStatus = "active"
-    }
-    if (!providerStatus && (provider?.id || skillRow?.id)) {
-      providerStatus = provider?.admin_approved ? "active" : "pending"
-    }
-
+    // Grants are the source of truth. Do not infer roles from leftover
+    // customer_details / provider_details stubs created mid-signup.
     const hasCustomer = grantAllowsAppAccess(customerStatus)
     const hasProvider = grantAllowsAppAccess(providerStatus)
 
@@ -83,10 +74,8 @@ export async function GET(req: NextRequest) {
       metadataRole: metaRole,
     })
 
-    // Mode switch when the account holds both roles (pending or active).
-    // Single-role accounts get Become a provider / Book a service instead.
-    // (Empty footer was a bug when provider was pending + customer active.)
-    const canSwitch = hasCustomer && hasProvider
+    // Dual-mode only when both roles were granted and provider onboard finished.
+    const canSwitch = hasCustomer && hasProvider && Boolean(skillRow?.id)
 
     const body: AccountRoles & {
       provider_has_skills: boolean

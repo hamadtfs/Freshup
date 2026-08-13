@@ -12,6 +12,7 @@ import {
   Zap,
 } from "lucide-react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import { loginToContinueCopy } from "@/lib/auth/login-required-copy";
 import { formatDisplayPrice } from "@/lib/pricing/format-display-kr";
 import { Button } from "@/components/ui/button";
 
@@ -106,7 +107,7 @@ export default function WalletPage({
     try {
       const token = await getToken();
       if (!token) {
-        setError(isEn ? "Please sign in" : "Logg inn for å se lommebok");
+        setError(loginToContinueCopy(isEn));
         setWallet(null);
         return;
       }
@@ -173,7 +174,7 @@ export default function WalletPage({
     try {
       const token = await getToken();
       if (!token) {
-        setError(isEn ? "Please sign in" : "Logg inn");
+        setError(loginToContinueCopy(isEn));
         return;
       }
       const origin = window.location.origin;
@@ -219,7 +220,7 @@ export default function WalletPage({
     try {
       const token = await getToken();
       if (!token) {
-        setConfirmError(isEn ? "Please sign in" : "Logg inn");
+        setConfirmError(loginToContinueCopy(isEn));
         return;
       }
 

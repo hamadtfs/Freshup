@@ -217,40 +217,10 @@ export async function PUT(req: NextRequest) {
       notification_opt_in: notificationOptIn,
       updated_at: now,
     }
-    let { error: profileErr } = await supabase.from("profiles").upsert(
-      {
-        ...baseProfile,
-        default_address: address || null,
-        default_lat: lat,
-        default_lng: lng,
-      },
-      { onConflict: "id" },
-    )
-    if (
-      profileErr &&
-      /default_(lat|lng|address)/i.test(profileErr.message || "")
-    ) {
-      ;({ error: profileErr } = await supabase
-        .from("profiles")
-        .upsert(baseProfile, { onConflict: "id" }))
-    }
+    const { error: profileErr } = await supabase
+      .from("profiles")
+      .upsert(baseProfile, { onConflict: "id" })
     if (profileErr) throw profileErr
-
-    // Ensure customer_details row exists for booking FKs.
-    try {
-      await supabase.from("customer_details").upsert(
-        { id: userId },
-        { onConflict: "id" },
-      )
-      await supabase.rpc("upsert_account_role_grant", {
-        p_user_id: userId,
-        p_role: "customer",
-        p_status: "active",
-        p_activate: true,
-      })
-    } catch (e) {
-      console.warn("[customers/me] ensure customer role", e)
-    }
 
     const location = {
       address: address || "",

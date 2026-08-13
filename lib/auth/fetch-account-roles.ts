@@ -58,6 +58,9 @@ export async function fetchAccountRoles(opts?: {
         data.active_role === "provider" || data.active_role === "customer"
           ? data.active_role
           : null,
+      provider_has_skills: Boolean(
+        (data as { provider_has_skills?: boolean }).provider_has_skills,
+      ),
     }
   } catch {
     return null

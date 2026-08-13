@@ -191,16 +191,7 @@ export default function ProviderPage() {
         .select("*")
         .eq("id", user.id)
         .maybeSingle();
-      if (!pp) {
-        await supabase.from("provider_details").insert({
-          id: user.id,
-          business_name: "Fresh Up Partner",
-          delivery_modes: ["home", "at_provider"],
-          lat: 59.9139,
-          lng: 10.7522,
-          is_online: false,
-        });
-      } else {
+      if (pp) {
         setOnline(!!pp.is_online);
         setHomeService(
           Array.isArray(pp.delivery_modes)
@@ -212,17 +203,31 @@ export default function ProviderPage() {
     run();
   }, [hasSupabase, user, supabase]);
 
-  // Online toggle -> update provider_details
+  // Online toggle -> gated API (Stripe payouts + admin approve + skills).
   const toggleOnline = async () => {
     if (!hasSupabase || !user) return;
     const newVal = !online;
     setOnline(newVal);
-    await supabase
-      .from("provider_details")
-      .update({ is_online: newVal })
-      .eq("id", user.id);
-    if (newVal) startGeo();
-    else stopGeo();
+    try {
+      const res = await fetch("/api/providers/online", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-provider-id": user.id,
+        },
+        body: JSON.stringify({ is_online: newVal }),
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        is_online?: boolean;
+      };
+      const live = res.ok && json.is_online === true;
+      setOnline(live);
+      if (live) startGeo();
+      else stopGeo();
+    } catch {
+      setOnline(false);
+      stopGeo();
+    }
   };
 
   // Persist live location

@@ -41,6 +41,7 @@ import {
 } from "@/lib/auth/provider-signup-gate";
 import { writeStoredDashboardMode } from "@/lib/auth/dashboard-mode";
 import { fetchAccountRoles } from "@/lib/auth/fetch-account-roles";
+import { claimSignupRole } from "@/lib/auth/claim-signup-role";
 import {
   snapPriceKr,
   snapPriceRangeKr,
@@ -1986,6 +1987,40 @@ export default function LoginPage({
     }
   };
 
+  const abandonProviderSignup = async () => {
+    clearProviderSignupInProgress();
+    onProviderSignupGateChange?.(false);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData?.session) {
+        setShowSummary(false);
+        setShowOtp(false);
+        setOtp("");
+        setView("landing");
+        return;
+      }
+      const roles = await fetchAccountRoles({
+        accessToken: sessionData.session.access_token,
+        intent: "customer",
+      });
+      if (roles?.has_customer) {
+        onLogin("customer");
+        return;
+      }
+      await supabase.auth.signOut();
+    } catch {
+      try {
+        await supabase.auth.signOut();
+      } catch {
+        /* still leave the flow */
+      }
+    }
+    setShowSummary(false);
+    setShowOtp(false);
+    setOtp("");
+    setView("landing");
+  };
+
   const handleVerifyOtp = async () => {
     setAuthError(null);
     const token = otp.replace(/\D/g, "");
@@ -2026,19 +2061,24 @@ export default function LoginPage({
         return false;
       }
 
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token as string | undefined;
+      await supabase.auth.updateUser({ data: { app_role: role } });
+      await claimSignupRole(role, { accessToken });
+
       // Customer login: enter the app. Do not send them into provider onboarding.
       if (role === "customer" || view === "customer") {
         onLogin("customer");
         return true;
       }
 
-      // Existing provider number → dashboard, skip name/skills onboarding.
+      // Existing provider who finished skills → dashboard. Incomplete signup stays here.
       try {
         const roles = await Promise.race([
-          fetchAccountRoles({ intent: "provider" }),
+          fetchAccountRoles({ intent: "provider", accessToken }),
           new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
         ]);
-        if (roles?.has_provider) {
+        if (roles?.has_provider && roles.provider_has_skills) {
           onLogin("provider");
           return true;
         }
@@ -2592,21 +2632,14 @@ export default function LoginPage({
                 setOtp("");
                 setProviderAuthStep("phone");
               } else if (providerAuthStep === "phone") {
-                clearProviderSignupInProgress();
-                onProviderSignupGateChange?.(false);
-                setShowSummary(false);
-                setStep("services");
-                setView("landing");
+                void abandonProviderSignup();
               } else if (providerAuthStep === "payment") {
                 setProviderAuthStep("profile");
                 setProviderSignupResumeStep("profile");
               } else if (providerAuthStep === "profile") {
                 setProviderAuthStep("otp");
               } else {
-                clearProviderSignupInProgress();
-                onProviderSignupGateChange?.(false);
-                setShowSummary(false);
-                setView("landing");
+                void abandonProviderSignup();
               }
             }}
             className="p-2 -ml-2"
@@ -2935,7 +2968,7 @@ export default function LoginPage({
               setProviderAuthStep("payment");
               setShowSummary(true);
             } else {
-              setView("landing");
+              void abandonProviderSignup();
             }
           }}
           className="p-2 -ml-2"

@@ -12,6 +12,7 @@ import {
   Truck,
 } from "lucide-react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import { loginToBookCopy } from "@/lib/auth/login-required-copy";
 import { formatDisplayPrice } from "@/lib/pricing/format-display-kr";
 import { displayServiceLabel } from "@/lib/service-id";
 
@@ -123,7 +124,7 @@ export default function TransactionDetailPage({
         const token = await getToken();
         if (!token) {
           if (!cancelled) {
-            setError(isEn ? "Please sign in" : "Logg inn for å se detaljer");
+            setError(loginToBookCopy(isEn));
           }
           return;
         }

@@ -416,10 +416,6 @@ export async function PUT(req: NextRequest) {
           address,
           lat,
           lng,
-          // Keep default_* in sync with the live/service location on profile save.
-          default_address: address,
-          default_lat: lat,
-          default_lng: lng,
           updated_at: now,
         },
         { onConflict: "id" },

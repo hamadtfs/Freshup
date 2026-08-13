@@ -3,6 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft, Calendar } from "lucide-react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import {
+  loginToBookCopy,
+  mapAuthGateCopy,
+} from "@/lib/auth/login-required-copy";
 import OrderHistoryCard, {
   OrderHistoryCardSkeleton,
   type OrderHistoryCardData,
@@ -54,7 +58,12 @@ export default function OrdersPage({
     try {
       const token = await getToken();
       if (!token) {
-        setError(isEn ? "Please sign in" : "Logg inn for å se bestillinger");
+        if (userType === "provider") {
+          setError(null);
+          setOrders([]);
+          return;
+        }
+        setError(loginToBookCopy(isEn));
         setOrders([]);
         return;
       }
@@ -71,9 +80,12 @@ export default function OrdersPage({
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(
-          String(
+          mapAuthGateCopy(
             data?.error ||
               (isEn ? "Could not load orders" : "Kunne ikke hente bestillinger"),
+            isEn,
+            res.status,
+            userType === "provider" ? "continue" : "book",
           ),
         );
         setOrders([]);

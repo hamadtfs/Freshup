@@ -144,6 +144,10 @@ import { DISPATCH_TIER_GAP_MS } from "@/lib/orders/dispatchTiming";
 import { maxDeliveryFeeAtDispatchRadius } from "@/lib/payments/delivery-ceiling";
 import { authorizeAmountFromPriceLock } from "@/lib/payments/payment-amounts";
 import { runBookingPaymentFlow } from "@/lib/payments/booking-payment-client";
+import {
+  loginToBookCopy,
+  mapAuthGateCopy,
+} from "@/lib/auth/login-required-copy";
 
 /** Customer status poll while hunting — slightly after each 3s dispatch wave. */
 const CUSTOMER_SEARCH_STATUS_POLL_MS = DISPATCH_TIER_GAP_MS + 500;
@@ -7149,17 +7153,42 @@ export default function Page() {
             : {}),
         }),
       });
-      if (!res.ok) {
-        providerOnlineHydrateGenRef.current += 1;
-        setIsProviderOnline(!next);
-        return;
-      }
       const json = (await res.json().catch(() => ({}))) as {
         is_online?: boolean;
+        error?: string;
+        message?: string;
       };
-      if (typeof json.is_online === "boolean" && json.is_online !== next) {
+      const live = res.ok && json.is_online === true;
+      if (next && !live) {
         providerOnlineHydrateGenRef.current += 1;
-        setIsProviderOnline(json.is_online);
+        setIsProviderOnline(false);
+        const code = String(json?.error || "");
+        const gateMsg =
+          code === "PAYOUT_SETUP_REQUIRED"
+            ? language === "en"
+              ? "Complete payout setup before going online."
+              : "Fullfør utbetalingsoppsett før du kan gå online."
+            : code === "ADMIN_PENDING"
+              ? language === "en"
+                ? "Waiting for FreshUp admin approval before you can go online."
+                : "Venter på FreshUp-godkjenning før du kan gå online."
+              : code === "SKILLS_REQUIRED"
+                ? language === "en"
+                  ? "Add at least one service before going online."
+                  : "Legg til minst én tjeneste før du kan gå online."
+                : null;
+        toast.error(
+          gateMsg ||
+            json?.message ||
+            (language === "en"
+              ? "Could not go online"
+              : "Kunne ikke gå online"),
+        );
+        return;
+      }
+      if (!res.ok || (typeof json.is_online === "boolean" && json.is_online !== next)) {
+        providerOnlineHydrateGenRef.current += 1;
+        setIsProviderOnline(json.is_online === true);
         return;
       }
       if (next) {
@@ -7168,8 +7197,11 @@ export default function Page() {
     } catch {
       providerOnlineHydrateGenRef.current += 1;
       setIsProviderOnline(!next);
+      toast.error(
+        language === "en" ? "Could not go online" : "Kunne ikke gå online",
+      );
     }
-  }, [hasSupabase, loggedInUser?.id, isProviderOnline]);
+  }, [hasSupabase, loggedInUser?.id, isProviderOnline, language]);
 
   // Keep last_online_at fresh while online so abandoned tabs don't stay in the pool.
   useEffect(() => {
@@ -11227,11 +11259,7 @@ export default function Page() {
       const { data: sessionData } = await supabase.auth.getSession();
       const accessToken = sessionData?.session?.access_token;
       if (!accessToken) {
-        throw new Error(
-          language === "en"
-            ? "Please sign in to continue"
-            : "Logg inn for a fortsette",
-        );
+        throw new Error(loginToBookCopy(language === "en"));
       }
 
       let finalPos: LatLng | null = customerLoc;
@@ -11332,7 +11360,9 @@ export default function Page() {
               : "Prislåsen utløp. Vi beregner pris på nytt, bekreft igjen.",
           );
         }
-        throw new Error(apiError || "Could not create order");
+        throw new Error(
+          mapAuthGateCopy(apiError || "Could not create order", language === "en"),
+        );
       }
       if (bookData?.order_id) {
         const newOrderId = String(bookData.order_id);
@@ -11588,8 +11618,10 @@ export default function Page() {
 
       await startOrderRealtimeWait();
     } catch (e) {
-      const message =
-        e instanceof Error ? e.message : "Could not match providers";
+      const message = mapAuthGateCopy(
+        e instanceof Error ? e.message : "Could not match providers",
+        language === "en",
+      );
       const noProviderError =
         message.includes("No providers available right now") ||
         message.includes("Ingen tilbydere tilgjengelig akkurat na");
@@ -11628,11 +11660,7 @@ export default function Page() {
         const { data: sessionData } = await supabase.auth.getSession();
         const accessToken = sessionData?.session?.access_token;
         if (!accessToken) {
-          throw new Error(
-            language === "en"
-              ? "Please sign in to continue"
-              : "Logg inn for a fortsette",
-          );
+          throw new Error(loginToBookCopy(language === "en"));
         }
         await runBookingPaymentFlow({
           accessToken,
@@ -11651,11 +11679,14 @@ export default function Page() {
         await proceedWithBooking();
       } catch (err) {
         setMatchError(
-          err instanceof Error
-            ? err.message
-            : language === "en"
-              ? "Payment failed"
-              : "Betaling mislyktes",
+          mapAuthGateCopy(
+            err instanceof Error
+              ? err.message
+              : language === "en"
+                ? "Payment failed"
+                : "Betaling mislyktes",
+            language === "en",
+          ),
         );
       } finally {
         setBookingPaymentPreparing(false);
@@ -13583,7 +13614,7 @@ export default function Page() {
   };
 
   const handleModeChange = (mode: "customer" | "provider") => {
-    if (!accountRolesUi.can_switch_modes) return;
+    if (loggedInUser?.id && !accountRolesUi.can_switch_modes) return;
     if (loggedInUser?.id) writeStoredDashboardMode(loggedInUser.id, mode);
     if (hasSupabase && loggedInUser?.id) {
       void (async () => {
@@ -13606,7 +13637,6 @@ export default function Page() {
           }).catch(() => {});
         } else if (mode === "provider" && userMode === "customer") {
           providerOnlineHydrateGenRef.current += 1;
-          setIsProviderOnline(true);
           const pos = providerBrowseGeolocRef.current;
           await fetch("/api/providers/online", {
             method: "POST",
@@ -13623,10 +13653,19 @@ export default function Page() {
                 : {}),
             }),
           })
-            .then((res) => {
-              if (res.ok) providerSyncPendingOffersRef.current?.(true);
+            .then(async (res) => {
+              const json = (await res.json().catch(() => ({}))) as {
+                is_online?: boolean;
+              };
+              const live = res.ok && json.is_online === true;
+              providerOnlineHydrateGenRef.current += 1;
+              setIsProviderOnline(live);
+              if (live) providerSyncPendingOffersRef.current?.(true);
             })
-            .catch(() => {});
+            .catch(() => {
+              providerOnlineHydrateGenRef.current += 1;
+              setIsProviderOnline(false);
+            });
         }
       })();
     }
@@ -14161,17 +14200,58 @@ export default function Page() {
         onLogout={() => {
           void handleLogout();
         }}
+        signedIn={Boolean(loggedInUser?.id)}
+        onLogin={() => {
+          setShowMenu(false);
+          setIsLoggedIn(false);
+        }}
         currentMode={userMode}
-        canSwitchModes={accountRolesUi.can_switch_modes}
+        canSwitchModes={
+          accountRolesUi.can_switch_modes || !loggedInUser?.id
+        }
         hasCustomerRole={accountRolesUi.has_customer}
         hasProviderRole={accountRolesUi.has_provider}
         onBecomeProvider={() => {
           window.location.href = "/?provider_signup=1";
         }}
         onBookAService={() => {
-          setUserMode("customer");
-          setStep("map");
-          setShowMenu(false);
+          void (async () => {
+            try {
+              const { data } = await supabase.auth.getSession();
+              const token = data?.session?.access_token as string | undefined;
+              await fetch("/api/customers/ensure", {
+                method: "POST",
+                headers: token
+                  ? { Authorization: `Bearer ${token}` }
+                  : {},
+              });
+              const roles = await fetchAccountRoles({
+                accessToken: token,
+                intent: "customer",
+              });
+              if (roles) {
+                setAccountRolesUi({
+                  has_customer: roles.has_customer,
+                  has_provider: roles.has_provider,
+                  can_switch_modes: Boolean(roles.can_switch_modes),
+                });
+              }
+              if (loggedInUser?.id) {
+                writeStoredDashboardMode(loggedInUser.id, "customer");
+              }
+              if (token) {
+                const claim = await setActiveRoleClaim("customer", {
+                  accessToken: token,
+                });
+                if (claim.ok) await supabase.auth.refreshSession();
+              }
+            } catch {
+              /* still open the map */
+            }
+            setUserMode("customer");
+            setStep("map");
+            setShowMenu(false);
+          })();
         }}
         userName={hamburgerUserName}
         userAvatarUrl={userAvatarUrl}
@@ -15997,8 +16077,7 @@ export default function Page() {
       {step === "map" &&
         userMode === "provider" &&
         providerJobStep === "waiting" &&
-        isBottomSheetCompressed &&
-        !showMenu && (
+        isBottomSheetCompressed && (
           <div
             className="absolute left-4 right-4 z-30 transition-all duration-300"
             style={{ bottom: "175px" }}
@@ -16447,77 +16526,6 @@ export default function Page() {
                                         {displayAvailability}
                                       </span>
                                     </div>
-                                    {userMode === "provider" &&
-                                    canProviderUseService ? (
-                                      <div
-                                        className="mt-2 flex items-center gap-1.5"
-                                        onClick={(e) => e.stopPropagation()}
-                                        onKeyDown={(e) => e.stopPropagation()}
-                                      >
-                                        <div
-                                          className={cn(
-                                            "glass-morphism rounded-full p-0.5 flex",
-                                            skillDeliveryMode === "both" &&
-                                              "opacity-40",
-                                          )}
-                                        >
-                                          <button
-                                            type="button"
-                                            className={cn(
-                                              "h-6 px-2 rounded-full text-[10px] font-medium transition-all",
-                                              skillDeliveryMode === "home"
-                                                ? "bg-white text-gray-900 shadow-sm"
-                                                : "text-gray-600",
-                                            )}
-                                            onClick={() =>
-                                              void setProviderSkillModePersisted(
-                                                matchedRegisteredServiceId ||
-                                                  style.id,
-                                                "home",
-                                              )
-                                            }
-                                          >
-                                            Delivery
-                                          </button>
-                                          <button
-                                            type="button"
-                                            className={cn(
-                                              "h-6 px-2 rounded-full text-[10px] font-medium transition-all",
-                                              skillDeliveryMode === "provider"
-                                                ? "bg-white text-gray-900 shadow-sm"
-                                                : "text-gray-600",
-                                            )}
-                                            onClick={() =>
-                                              void setProviderSkillModePersisted(
-                                                matchedRegisteredServiceId ||
-                                                  style.id,
-                                                "provider",
-                                              )
-                                            }
-                                          >
-                                            {t("at_provider")}
-                                          </button>
-                                        </div>
-                                        <button
-                                          type="button"
-                                          className={cn(
-                                            "h-6 px-2 rounded-full text-[10px] font-medium border transition-all",
-                                            skillDeliveryMode === "both"
-                                              ? "bg-green-500 text-white border-green-500"
-                                              : "bg-white/50 text-gray-600 border-white/40",
-                                          )}
-                                          onClick={() =>
-                                            void setProviderSkillModePersisted(
-                                              matchedRegisteredServiceId ||
-                                                style.id,
-                                              "both",
-                                            )
-                                          }
-                                        >
-                                          {language === "en" ? "Both" : "Begge"}
-                                        </button>
-                                      </div>
-                                    ) : null}
                                   </div>
                                 </div>
 
@@ -16609,6 +16617,76 @@ export default function Page() {
                                   )}
                                 </div>
                               </div>
+                              {userMode === "provider" &&
+                              canProviderUseService ? (
+                                <div
+                                  className="mt-2 flex flex-nowrap items-center gap-1"
+                                  onClick={(e) => e.stopPropagation()}
+                                  onKeyDown={(e) => e.stopPropagation()}
+                                >
+                                  <div
+                                    className={cn(
+                                      "glass-morphism flex shrink-0 rounded-full p-0.5",
+                                      skillDeliveryMode === "both" &&
+                                        "opacity-40",
+                                    )}
+                                  >
+                                    <button
+                                      type="button"
+                                      className={cn(
+                                        "h-6 shrink-0 whitespace-nowrap rounded-full px-2 text-[11px] font-medium transition-all",
+                                        skillDeliveryMode === "home"
+                                          ? "bg-white text-gray-900 shadow-sm"
+                                          : "text-gray-600",
+                                      )}
+                                      onClick={() =>
+                                        void setProviderSkillModePersisted(
+                                          matchedRegisteredServiceId ||
+                                            style.id,
+                                          "home",
+                                        )
+                                      }
+                                    >
+                                      Delivery
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className={cn(
+                                        "h-6 shrink-0 whitespace-nowrap rounded-full px-2 text-[11px] font-medium transition-all",
+                                        skillDeliveryMode === "provider"
+                                          ? "bg-white text-gray-900 shadow-sm"
+                                          : "text-gray-600",
+                                      )}
+                                      onClick={() =>
+                                        void setProviderSkillModePersisted(
+                                          matchedRegisteredServiceId ||
+                                            style.id,
+                                          "provider",
+                                        )
+                                      }
+                                    >
+                                      {t("at_provider")}
+                                    </button>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className={cn(
+                                      "h-6 shrink-0 whitespace-nowrap rounded-full border px-2 text-[11px] font-medium transition-all",
+                                      skillDeliveryMode === "both"
+                                        ? "border-green-500 bg-green-500 text-white"
+                                        : "border-white/40 bg-white/50 text-gray-600",
+                                    )}
+                                    onClick={() =>
+                                      void setProviderSkillModePersisted(
+                                        matchedRegisteredServiceId || style.id,
+                                        "both",
+                                      )
+                                    }
+                                  >
+                                    {language === "en" ? "Both" : "Begge"}
+                                  </button>
+                                </div>
+                              ) : null}
                             </div>
 
                             {/* Expanded details - minimalist */}

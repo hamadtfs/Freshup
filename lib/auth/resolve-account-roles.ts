@@ -15,6 +15,8 @@ export type AccountRoles = {
   can_switch_modes?: boolean;
   /** Server JWT claim / prefered active app role when dual. */
   active_role?: DashboardMode | null;
+  /** True when at least one provider_skills row exists. */
+  provider_has_skills?: boolean;
 };
 
 export function rolesFromFlags(

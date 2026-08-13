@@ -10,6 +10,7 @@ import {
   ArrowDownLeft,
 } from "lucide-react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import { loginToContinueCopy } from "@/lib/auth/login-required-copy";
 import { formatDisplayPrice } from "@/lib/pricing/format-display-kr";
 import { displayServiceLabel } from "@/lib/service-id";
 
@@ -101,7 +102,7 @@ export default function EarningsPage({
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData?.session?.access_token;
       if (!token) {
-        setError(isEn ? "Please sign in" : "Logg inn for å se inntjening");
+        setError(loginToContinueCopy(isEn));
         setTransactions([]);
         return;
       }

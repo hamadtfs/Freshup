@@ -31,26 +31,7 @@ export async function POST(req: NextRequest) {
 
     const grants = await listAccountRoleGrants(supabase, userId)
     const status = grants.find((g) => g.role === role)?.status ?? null
-
-    // Legacy fallback: detail row presence.
-    let allowed = grantAllowsAppAccess(status)
-    if (grants.length === 0) {
-      if (role === "customer") {
-        const { data } = await supabase
-          .from("customer_details")
-          .select("id")
-          .eq("id", userId)
-          .maybeSingle()
-        allowed = Boolean(data?.id)
-      } else {
-        const { data } = await supabase
-          .from("provider_details")
-          .select("id")
-          .eq("id", userId)
-          .maybeSingle()
-        allowed = Boolean(data?.id)
-      }
-    }
+    const allowed = grantAllowsAppAccess(status)
 
     if (!allowed) {
       return NextResponse.json(

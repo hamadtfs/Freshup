@@ -11,6 +11,10 @@ import {
   REALTIME_CHAT_SAFETY_POLL_MS,
   type AdaptivePoll,
 } from "@/lib/realtime/adaptive-poll"
+import {
+  loginToContinueCopy,
+  mapAuthGateCopy,
+} from "@/lib/auth/login-required-copy"
 
 const POLL_MS = 2500
 const OPTIMISTIC_PREFIX = "opt-"
@@ -211,7 +215,9 @@ export function useConversationMessages({
       try {
         const auth = await getSessionAuth()
         if (!auth) {
-          if (!cancelled) setError("Unauthorized")
+          if (!cancelled) {
+            setError(loginToContinueCopy(languageRef.current === "en"))
+          }
           return
         }
         myUserIdRef.current = auth.userId
@@ -241,7 +247,16 @@ export function useConversationMessages({
             language,
           })
           if (listed.error) {
-            if (!cancelled) setError(listed.error)
+            if (!cancelled) {
+              setError(
+                mapAuthGateCopy(
+                  listed.error,
+                  languageRef.current === "en",
+                  undefined,
+                  "continue",
+                ),
+              )
+            }
             return
           }
           if (!cancelled) {

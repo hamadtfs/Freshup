@@ -9,6 +9,7 @@ import {
   Calendar,
   Headphones,
   Info,
+  LogIn,
   LogOut,
   User,
   Briefcase,
@@ -60,6 +61,9 @@ interface HamburgerMenuProps {
   onNavigate: (page: "orders" | "support" | "about" | "payment" | "earnings" | "wallet" | "skills" | "profile" | "stats" | "admin") => void
   onModeChange: (mode: UserMode) => void
   onLogout: () => void
+  /** When false, footer shows Log in instead of Log out. */
+  signedIn?: boolean
+  onLogin?: () => void
   currentMode: UserMode
   /** When true, show Customer/Provider toggle. Otherwise Become a provider / Book a service. */
   canSwitchModes?: boolean
@@ -88,6 +92,8 @@ export default function HamburgerMenu({
   onNavigate,
   onModeChange,
   onLogout,
+  signedIn = true,
+  onLogin,
   currentMode,
   canSwitchModes = false,
   hasCustomerRole = false,
@@ -682,14 +688,26 @@ export default function HamburgerMenu({
             </button>
           )}
 
-          {/* Logout */}
-          <button
-            onClick={onLogout}
-            className="w-full flex items-center gap-4 p-3 rounded-xl hover:bg-muted transition-colors text-red-500"
-          >
-            <LogOut className="h-5 w-5" />
-            <span className="font-medium">{isEn ? "Log out" : "Logg ut"}</span>
-          </button>
+          {signedIn ? (
+            <button
+              onClick={onLogout}
+              className="w-full flex items-center gap-4 p-3 rounded-xl hover:bg-muted transition-colors text-red-500"
+            >
+              <LogOut className="h-5 w-5" />
+              <span className="font-medium">{isEn ? "Log out" : "Logg ut"}</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => {
+                onLogin?.()
+                onClose()
+              }}
+              className="w-full flex items-center gap-4 p-3 rounded-xl hover:bg-muted transition-colors"
+            >
+              <LogIn className="h-5 w-5" />
+              <span className="font-medium">{isEn ? "Log in" : "Logg inn"}</span>
+            </button>
+          )}
         </div>
       </div>
     </>

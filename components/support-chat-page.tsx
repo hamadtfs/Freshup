@@ -8,6 +8,10 @@ import {
   getSessionAuth,
   useConversationMessages,
 } from "@/lib/chat/use-conversation-messages"
+import {
+  loginToContinueCopy,
+  mapAuthGateCopy,
+} from "@/lib/auth/login-required-copy"
 
 interface SupportChatPageProps {
   onBack: () => void
@@ -63,7 +67,7 @@ export default function SupportChatPage({
         const auth = await getSessionAuth()
         if (!auth) {
           if (!cancelled) {
-            setBootError(isEn ? "Please sign in again." : "Logg inn på nytt.")
+            setBootError(loginToContinueCopy(isEn))
           }
           return
         }
@@ -76,10 +80,15 @@ export default function SupportChatPage({
         if (!opened.conversation_id) {
           if (!cancelled) {
             setBootError(
-              opened.error ||
-                (isEn
-                  ? "Could not open support chat."
-                  : "Kunne ikke åpne supportchat."),
+              mapAuthGateCopy(
+                opened.error ||
+                  (isEn
+                    ? "Could not open support chat."
+                    : "Kunne ikke åpne supportchat."),
+                isEn,
+                undefined,
+                "continue",
+              ) || loginToContinueCopy(isEn),
             )
           }
           return
@@ -111,7 +120,10 @@ export default function SupportChatPage({
   }, [messages])
 
   const loading = bootLoading || messagesLoading
-  const error = bootError || messagesError
+  const rawError = bootError || messagesError
+  const error = rawError
+    ? mapAuthGateCopy(rawError, isEn, undefined, "continue") || rawError
+    : null
 
   const sendMessage = () => {
     const text = newMessage.trim()

@@ -9,6 +9,7 @@ import {
   getSessionAuth,
   useConversationMessages,
 } from "@/lib/chat/use-conversation-messages"
+import { loginToContinueCopy } from "@/lib/auth/login-required-copy"
 
 interface ChatPageProps {
   onBack: () => void
@@ -64,7 +65,7 @@ export default function ChatPage({
         const auth = await getSessionAuth()
         if (!auth) {
           if (!cancelled) {
-            setBootError(isEn ? "Please sign in again." : "Logg inn på nytt.")
+            setBootError(loginToContinueCopy(isEn))
           }
           return
         }

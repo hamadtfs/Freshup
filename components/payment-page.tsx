@@ -12,6 +12,10 @@ import {
   Receipt,
 } from "lucide-react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import {
+  loginToBookCopy,
+  mapAuthGateCopy,
+} from "@/lib/auth/login-required-copy";
 import AddCardForm from "@/components/add-card-form";
 import TransactionDetailPage from "@/components/transaction-detail-page";
 import { formatDisplayPrice } from "@/lib/pricing/format-display-kr";
@@ -127,7 +131,7 @@ export default function PaymentPage({
     try {
       const token = await getToken();
       if (!token) {
-        setError(isEn ? "Please sign in" : "Logg inn for å se betaling");
+        setError(loginToBookCopy(isEn));
         setMethods([]);
         return;
       }
@@ -139,9 +143,11 @@ export default function PaymentPage({
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(
-          String(
+          mapAuthGateCopy(
             data?.error ||
               (isEn ? "Could not load cards" : "Kunne ikke hente kort"),
+            isEn,
+            res.status,
           ),
         );
         setMethods([]);
@@ -193,7 +199,7 @@ export default function PaymentPage({
     try {
       const token = await getToken();
       if (!token) {
-        setError(isEn ? "Please sign in" : "Logg inn for å legge til kort");
+        setError(loginToBookCopy(isEn));
         return;
       }
       setAccessToken(token);
@@ -204,8 +210,10 @@ export default function PaymentPage({
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(
-          String(
+          mapAuthGateCopy(
             data?.error || (isEn ? "Could not start" : "Kunne ikke starte"),
+            isEn,
+            res.status,
           ),
         );
         return;
