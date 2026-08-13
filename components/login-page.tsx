@@ -40,6 +40,7 @@ import {
   setProviderSignupResumeStep,
 } from "@/lib/auth/provider-signup-gate";
 import { writeStoredDashboardMode } from "@/lib/auth/dashboard-mode";
+import { fetchAccountRoles } from "@/lib/auth/fetch-account-roles";
 import {
   snapPriceKr,
   snapPriceRangeKr,
@@ -2000,6 +2001,10 @@ export default function LoginPage({
         );
         return false;
       }
+      if (role === "customer" || view === "customer") {
+        onLogin("customer");
+        return true;
+      }
       // Phone verified first — collect profile/payment before durable onboard.
       setProviderAuthStep("profile");
       setProviderSignupResumeStep("profile");
@@ -2020,6 +2025,27 @@ export default function LoginPage({
         );
         return false;
       }
+
+      // Customer login: enter the app. Do not send them into provider onboarding.
+      if (role === "customer" || view === "customer") {
+        onLogin("customer");
+        return true;
+      }
+
+      // Existing provider number → dashboard, skip name/skills onboarding.
+      try {
+        const roles = await Promise.race([
+          fetchAccountRoles({ intent: "provider" }),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
+        ]);
+        if (roles?.has_provider) {
+          onLogin("provider");
+          return true;
+        }
+      } catch {
+        // fall through to onboarding
+      }
+
       beginProviderSignupInProgress("profile");
       setProviderSignupResumeStep("profile");
       onProviderSignupGateChange?.(true);

@@ -9,6 +9,7 @@ import {
   DISPATCH_TIER_GAP_MS,
   DISPATCH_TIERS_PER_BATCH,
   dispatchStepDelayMs,
+  offerDispatchTelemetry,
 } from "@/lib/orders/dispatchTiming";
   
 type Batch = {
@@ -428,6 +429,7 @@ export async function dispatchTick(
             .slice(0, DISPATCH_MATCHES_PER_WAVE);
 
           const offeredPrice = (order as any)?.price ?? null;
+          const telemetry = offerDispatchTelemetry(stepToRun);
           const toInsert: Array<{
             order_id: string;
             provider_id: string;
@@ -435,6 +437,9 @@ export async function dispatchTick(
             offered_price: any;
             provider_distance_km: number;
             expires_at: string;
+            batch_index: number;
+            wave_index: number;
+            provider_tier: string;
           }> = [];
 
           for (const p of matches) {
@@ -451,6 +456,9 @@ export async function dispatchTick(
               expires_at: new Date(
                 Date.now() + DISPATCH_PROVIDER_OFFER_TTL_MS,
               ).toISOString(),
+              batch_index: telemetry.batch_index,
+              wave_index: telemetry.wave_index,
+              provider_tier: telemetry.provider_tier,
             });
             providersWhoAlreadySawOffer.add(pid);
           }

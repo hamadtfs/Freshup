@@ -2,7 +2,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/server";
 import { MAX_DISPATCH_MATCH_RADIUS_KM } from "@/lib/orders/dispatch-radius";
 import type { ServiceModeId } from "@/lib/customer/types";
-import { DISPATCH_PROVIDER_OFFER_TTL_MS } from "@/lib/orders/dispatchTiming";
+import {
+  DISPATCH_PROVIDER_OFFER_TTL_MS,
+  offerDispatchTelemetry,
+} from "@/lib/orders/dispatchTiming";
 
 export type DeliveryMode = "home" | "at_provider";
 
@@ -294,6 +297,10 @@ export async function dispatchOrderById(
       };
     }
 
+    const priorWave = Number((order as { dispatch_wave_index?: unknown }).dispatch_wave_index);
+    const telemetry = offerDispatchTelemetry(
+      Number.isFinite(priorWave) && priorWave >= 0 ? priorWave : 0,
+    );
     const rows = matches.map((p) => ({
       order_id: orderId,
       provider_id: p.provider_id,
@@ -303,6 +310,9 @@ export async function dispatchOrderById(
       expires_at: new Date(
         Date.now() + DISPATCH_PROVIDER_OFFER_TTL_MS,
       ).toISOString(),
+      batch_index: telemetry.batch_index,
+      wave_index: telemetry.wave_index,
+      provider_tier: telemetry.provider_tier,
     }));
     const { error: offerErr } = await supabase
       .from("order_offers")

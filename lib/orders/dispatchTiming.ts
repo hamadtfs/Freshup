@@ -26,3 +26,23 @@ export const DISPATCH_LAST_WAVE_DELAY_MS =
 
 /** Providers considered per sub-wave after RPC match. */
 export const DISPATCH_MATCHES_PER_WAVE = 15;
+
+const PERF_TIERS = ["gold", "silver", "bronze"] as const;
+
+/** Columns written onto each order_offers row at send time. */
+export function offerDispatchTelemetry(stepIndex: number): {
+  batch_index: number;
+  wave_index: number;
+  provider_tier: (typeof PERF_TIERS)[number];
+} {
+  const lastStep =
+    DISPATCH_BATCH_COUNT * DISPATCH_TIERS_PER_BATCH - 1;
+  const clamped = Math.max(0, Math.min(stepIndex, lastStep));
+  const batchIndex = Math.floor(clamped / DISPATCH_TIERS_PER_BATCH);
+  const tierIndex = clamped % DISPATCH_TIERS_PER_BATCH;
+  return {
+    batch_index: batchIndex,
+    wave_index: stepIndex,
+    provider_tier: PERF_TIERS[tierIndex] ?? "silver",
+  };
+}
