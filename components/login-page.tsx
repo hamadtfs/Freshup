@@ -1330,8 +1330,10 @@ export default function LoginPage({
   const supabase = useMemo(() => createBrowserSupabaseClient() as any, []);
 
   // View state
-  const [view, setView] = useState<"landing" | "customer" | "provider">(
-    "landing",
+  const [view, setView] = useState<"landing" | "customer" | "provider">(() =>
+    typeof window !== "undefined" && isProviderSignupInProgress()
+      ? "provider"
+      : "landing",
   );
   const [isProviderMode, setIsProviderMode] = useState(false);
   const [phone, setPhone] = useState("");
@@ -1389,9 +1391,10 @@ export default function LoginPage({
   >("idle");
 
   // Resume phone-first provider signup after OAuth return (or remount).
+  // Existing customer → skip verify-phone, same as mobile Become a provider.
   useEffect(() => {
     if (!isProviderSignupInProgress()) return;
-    const resume = peekProviderSignupResumeStep() || "profile";
+    let resume = peekProviderSignupResumeStep() || "profile";
     setView("provider");
     if (resume === "services") {
       setShowSummary(false);
@@ -1402,6 +1405,22 @@ export default function LoginPage({
     setStep("auth");
     setProviderAuthStep(resume === "otp" ? "profile" : resume);
     onProviderSignupGateChange?.(true);
+
+    void supabase.auth.getSession().then(({ data }: any) => {
+      const user = data?.session?.user;
+      if (!user) return;
+      if (resume === "phone" || resume === "otp") {
+        setProviderSignupResumeStep("profile");
+        setProviderAuthStep("profile");
+      }
+      const meta = user.user_metadata ?? {};
+      const name = String(
+        meta.full_name || meta.name || meta.display_name || "",
+      ).trim();
+      if (name) setProfileName((prev) => prev || name);
+      const avatar = String(meta.avatar_url || meta.picture || "").trim();
+      if (avatar) setProfileAvatarUrl((prev) => prev || avatar);
+    });
 
     const params = new URLSearchParams(window.location.search);
     const connectReturn =
@@ -2637,7 +2656,9 @@ export default function LoginPage({
                 setProviderAuthStep("profile");
                 setProviderSignupResumeStep("profile");
               } else if (providerAuthStep === "profile") {
-                setProviderAuthStep("otp");
+                // Become a provider from an existing customer skipped phone —
+                // back goes home, not to a code they never received.
+                void abandonProviderSignup();
               } else {
                 void abandonProviderSignup();
               }

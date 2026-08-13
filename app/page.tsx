@@ -29,6 +29,7 @@ import {
 } from "@/lib/auth/resolve-account-roles";
 import { clearOAuthPending } from "@/lib/auth/oauth-pending";
 import {
+  beginProviderSignupInProgress,
   clearProviderSignupInProgress,
   isProviderSignupInProgress,
 } from "@/lib/auth/provider-signup-gate";
@@ -5584,6 +5585,20 @@ export default function Page() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    const q = new URLSearchParams(window.location.search).get(
+      "provider_signup",
+    );
+    if (
+      q === "1" ||
+      q === "connect_return" ||
+      q === "connect_refresh"
+    ) {
+      if (!isProviderSignupInProgress()) {
+        beginProviderSignupInProgress(q === "1" ? "profile" : "payment");
+      }
+      setProviderSignupGate(true);
+      return;
+    }
     setProviderSignupGate(isProviderSignupInProgress());
   }, []);
 
@@ -14212,7 +14227,9 @@ export default function Page() {
         hasCustomerRole={accountRolesUi.has_customer}
         hasProviderRole={accountRolesUi.has_provider}
         onBecomeProvider={() => {
-          window.location.href = "/?provider_signup=1";
+          beginProviderSignupInProgress("profile");
+          setShowMenu(false);
+          setProviderSignupGate(true);
         }}
         onBookAService={() => {
           void (async () => {
