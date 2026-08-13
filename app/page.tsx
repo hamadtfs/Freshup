@@ -32,6 +32,7 @@ import {
   beginProviderSignupInProgress,
   clearProviderSignupInProgress,
   isProviderSignupInProgress,
+  peekProviderSignupResumeStep,
 } from "@/lib/auth/provider-signup-gate";
 import {
   Scissors,
@@ -5582,24 +5583,28 @@ export default function Page() {
   const [authReady, setAuthReady] = useState(!hasSupabase);
   const [forceProviderSetup, setForceProviderSetup] = useState(false);
   const [providerSignupGate, setProviderSignupGate] = useState(false);
+  const [accountRolesReady, setAccountRolesReady] = useState(false);
+  const providerSignupBootstrappedRef = useRef(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const q = new URLSearchParams(window.location.search).get(
-      "provider_signup",
-    );
-    if (
-      q === "1" ||
-      q === "connect_return" ||
-      q === "connect_refresh"
-    ) {
+    const params = new URLSearchParams(window.location.search);
+    const q = params.get("provider_signup");
+    // Old Become a provider used ?provider_signup=1 — do not reopen
+    // onboarding on every customer reload.
+    if (q === "1") {
+      params.delete("provider_signup");
+      const next = `${window.location.pathname}${
+        params.toString() ? `?${params.toString()}` : ""
+      }`;
+      window.history.replaceState({}, "", next);
+    }
+    if (q === "connect_return" || q === "connect_refresh") {
       if (!isProviderSignupInProgress()) {
-        beginProviderSignupInProgress(q === "1" ? "profile" : "payment");
+        beginProviderSignupInProgress("payment");
       }
       setProviderSignupGate(true);
-      return;
     }
-    setProviderSignupGate(isProviderSignupInProgress());
   }, []);
 
   // If an existing session is found, skip splash and land directly in-app
@@ -5679,6 +5684,42 @@ export default function Page() {
     has_provider: boolean;
     can_switch_modes: boolean;
   }>({ has_customer: false, has_provider: false, can_switch_modes: false });
+
+  // Restore mid-signup only for a real in-progress flow (phone/OTP/Connect).
+  // Existing customers with a leftover "profile" flag stay on the customer app.
+  useEffect(() => {
+    if (!authReady || providerSignupBootstrappedRef.current) return;
+    if (isLoggedIn && !accountRolesReady) return;
+    providerSignupBootstrappedRef.current = true;
+
+    const q =
+      typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search).get("provider_signup")
+        : null;
+    if (q === "connect_return" || q === "connect_refresh") {
+      setProviderSignupGate(true);
+      return;
+    }
+
+    if (!isProviderSignupInProgress()) {
+      setProviderSignupGate(false);
+      return;
+    }
+
+    const step = peekProviderSignupResumeStep();
+    if (
+      isLoggedIn &&
+      accountRolesUi.has_customer &&
+      (step === "profile" || step === "phone" || step === "otp")
+    ) {
+      clearProviderSignupInProgress();
+      setProviderSignupGate(false);
+      return;
+    }
+
+    setProviderSignupGate(true);
+  }, [authReady, isLoggedIn, accountRolesReady, accountRolesUi.has_customer]);
+
   const [language, setLanguage] = useState<Language>(
     () => readStoredLanguage() ?? "no",
   );
@@ -6348,14 +6389,21 @@ export default function Page() {
             void supabase.auth.updateUser({ data: { app_role: "provider" } });
           }
         });
-        void fetchAccountRoles({ accessToken: token }).then((roles) => {
-          if (!roles) return;
-          setAccountRolesUi({
-            has_customer: roles.has_customer,
-            has_provider: roles.has_provider,
-            can_switch_modes: Boolean(roles.can_switch_modes),
+        void fetchAccountRoles({ accessToken: token })
+          .then((roles) => {
+            if (cancelled) return;
+            if (roles) {
+              setAccountRolesUi({
+                has_customer: roles.has_customer,
+                has_provider: roles.has_provider,
+                can_switch_modes: Boolean(roles.can_switch_modes),
+              });
+            }
+            setAccountRolesReady(true);
+          })
+          .catch(() => {
+            if (!cancelled) setAccountRolesReady(true);
           });
-        });
       } else {
         setIsProviderOnline(false);
         setAccountRolesUi({
@@ -6363,6 +6411,7 @@ export default function Page() {
           has_provider: false,
           can_switch_modes: false,
         });
+        setAccountRolesReady(true);
       }
     };
     const authReadyTimeout = window.setTimeout(() => {
@@ -7201,7 +7250,10 @@ export default function Page() {
         );
         return;
       }
-      if (!res.ok || (typeof json.is_online === "boolean" && json.is_online !== next)) {
+      if (
+        !res.ok ||
+        (typeof json.is_online === "boolean" && json.is_online !== next)
+      ) {
         providerOnlineHydrateGenRef.current += 1;
         setIsProviderOnline(json.is_online === true);
         return;
@@ -11376,7 +11428,10 @@ export default function Page() {
           );
         }
         throw new Error(
-          mapAuthGateCopy(apiError || "Could not create order", language === "en"),
+          mapAuthGateCopy(
+            apiError || "Could not create order",
+            language === "en",
+          ),
         );
       }
       if (bookData?.order_id) {
@@ -14221,9 +14276,7 @@ export default function Page() {
           setIsLoggedIn(false);
         }}
         currentMode={userMode}
-        canSwitchModes={
-          accountRolesUi.can_switch_modes || !loggedInUser?.id
-        }
+        canSwitchModes={accountRolesUi.can_switch_modes || !loggedInUser?.id}
         hasCustomerRole={accountRolesUi.has_customer}
         hasProviderRole={accountRolesUi.has_provider}
         onBecomeProvider={() => {
@@ -14238,9 +14291,7 @@ export default function Page() {
               const token = data?.session?.access_token as string | undefined;
               await fetch("/api/customers/ensure", {
                 method: "POST",
-                headers: token
-                  ? { Authorization: `Bearer ${token}` }
-                  : {},
+                headers: token ? { Authorization: `Bearer ${token}` } : {},
               });
               const roles = await fetchAccountRoles({
                 accessToken: token,
