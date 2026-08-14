@@ -40,6 +40,10 @@ import {
   setProviderSignupResumeStep,
 } from "@/lib/auth/provider-signup-gate";
 import { writeStoredDashboardMode } from "@/lib/auth/dashboard-mode";
+import {
+  peekLoginRoleIntent,
+  writeLoginRoleIntent,
+} from "@/lib/auth/login-role-intent";
 import { fetchAccountRoles } from "@/lib/auth/fetch-account-roles";
 import { claimSignupRole } from "@/lib/auth/claim-signup-role";
 import {
@@ -1330,12 +1334,15 @@ export default function LoginPage({
   const supabase = useMemo(() => createBrowserSupabaseClient() as any, []);
 
   // View state
-  const [view, setView] = useState<"landing" | "customer" | "provider">(() =>
-    typeof window !== "undefined" && isProviderSignupInProgress()
-      ? "provider"
-      : "landing",
+  const [view, setView] = useState<"landing" | "customer" | "provider">(() => {
+    if (typeof window === "undefined") return "landing";
+    if (isProviderSignupInProgress()) return "provider";
+    if (peekLoginRoleIntent()) return "customer";
+    return "landing";
+  });
+  const [isProviderMode, setIsProviderMode] = useState(
+    () => peekLoginRoleIntent() === "provider",
   );
-  const [isProviderMode, setIsProviderMode] = useState(false);
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
   const [showOtp, setShowOtp] = useState(false);
@@ -2055,7 +2062,7 @@ export default function LoginPage({
         );
         return false;
       }
-      if (role === "customer" || view === "customer") {
+      if (role === "customer") {
         onLogin("customer");
         return true;
       }
@@ -2086,7 +2093,7 @@ export default function LoginPage({
       await claimSignupRole(role, { accessToken });
 
       // Customer login: enter the app. Do not send them into provider onboarding.
-      if (role === "customer" || view === "customer") {
+      if (role === "customer") {
         onLogin("customer");
         return true;
       }
@@ -2269,7 +2276,11 @@ export default function LoginPage({
         {/* Bottom CTAs */}
         <div className="p-6 space-y-3">
           <button
-            onClick={() => setView("customer")}
+            onClick={() => {
+              writeLoginRoleIntent("customer");
+              setIsProviderMode(false);
+              setView("customer");
+            }}
             className="w-full py-4 bg-muted text-foreground rounded-full font-medium"
           >
             {isEn ? "Log in" : "Logg inn"}
@@ -2326,7 +2337,10 @@ export default function LoginPage({
         <div className="px-6 mb-4">
           <div className="bg-muted rounded-full p-1 flex w-fit">
             <button
-              onClick={() => setIsProviderMode(false)}
+              onClick={() => {
+                setIsProviderMode(false);
+                writeLoginRoleIntent("customer");
+              }}
               className={cn(
                 "px-4 py-2 rounded-full text-sm font-medium transition-all",
                 !isProviderMode
@@ -2337,7 +2351,10 @@ export default function LoginPage({
               {isEn ? "Customer" : "Kunde"}
             </button>
             <button
-              onClick={() => setIsProviderMode(true)}
+              onClick={() => {
+                setIsProviderMode(true);
+                writeLoginRoleIntent("provider");
+              }}
               className={cn(
                 "px-4 py-2 rounded-full text-sm font-medium transition-all",
                 isProviderMode

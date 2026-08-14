@@ -52,8 +52,8 @@ export function pickDashboardMode(opts: {
   if (hasCustomer && !hasProvider) return "customer";
   if (hasProvider && hasCustomer) {
     if (intent === "provider" || intent === "customer") return intent;
-    if (stored === "provider" || stored === "customer") return stored;
     if (meta === "provider" || meta === "customer") return meta;
+    if (stored === "provider" || stored === "customer") return stored;
     return "customer";
   }
 
@@ -65,8 +65,10 @@ export function pickDashboardMode(opts: {
 
 export function metadataRoleFromUser(user: {
   user_metadata?: { app_role?: unknown } | null;
-  app_metadata?: { app_role?: unknown } | null;
+  app_metadata?: { app_role?: unknown; active_role?: unknown } | null;
 } | null): DashboardMode | null {
+  const active = user?.app_metadata?.active_role;
+  if (active === "provider" || active === "customer") return active;
   const raw =
     user?.user_metadata?.app_role ?? user?.app_metadata?.app_role ?? null;
   if (raw === "provider" || raw === "customer") return raw;

@@ -42,7 +42,8 @@ export function offerDispatchTelemetry(stepIndex: number): {
   const tierIndex = clamped % DISPATCH_TIERS_PER_BATCH;
   return {
     batch_index: batchIndex,
-    // Spec: 1–3 within the batch (Gold / Silver / Bronze), not global 0–17.
+    // Spec: 1–3 within the batch (Gold / Silver / Bronze).
+    // orders.dispatch_wave_index stays the global 0–17 tick cursor.
     wave_index: tierIndex + 1,
     provider_tier: PERF_TIERS[tierIndex] ?? "silver",
   };
