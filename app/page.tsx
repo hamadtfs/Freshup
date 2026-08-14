@@ -146,6 +146,7 @@ import { DISPATCH_TIER_GAP_MS } from "@/lib/orders/dispatchTiming";
 import { maxDeliveryFeeAtDispatchRadius } from "@/lib/payments/delivery-ceiling";
 import { authorizeAmountFromPriceLock } from "@/lib/payments/payment-amounts";
 import { runBookingPaymentFlow } from "@/lib/payments/booking-payment-client";
+import { bookingPaymentUserMessage } from "@/lib/payments/booking-payment-errors";
 import {
   loginToBookCopy,
   mapAuthGateCopy,
@@ -5718,7 +5719,12 @@ export default function Page() {
     }
 
     setProviderSignupGate(true);
-  }, [authReady, isLoggedIn, accountRolesReady, accountRolesUi.has_customer]);
+  }, [
+    authReady,
+    isLoggedIn,
+    accountRolesReady,
+    accountRolesUi.has_customer,
+  ]);
 
   const [language, setLanguage] = useState<Language>(
     () => readStoredLanguage() ?? "no",
@@ -7250,10 +7256,7 @@ export default function Page() {
         );
         return;
       }
-      if (
-        !res.ok ||
-        (typeof json.is_online === "boolean" && json.is_online !== next)
-      ) {
+      if (!res.ok || (typeof json.is_online === "boolean" && json.is_online !== next)) {
         providerOnlineHydrateGenRef.current += 1;
         setIsProviderOnline(json.is_online === true);
         return;
@@ -11428,10 +11431,7 @@ export default function Page() {
           );
         }
         throw new Error(
-          mapAuthGateCopy(
-            apiError || "Could not create order",
-            language === "en",
-          ),
+          mapAuthGateCopy(apiError || "Could not create order", language === "en"),
         );
       }
       if (bookData?.order_id) {
@@ -11748,13 +11748,15 @@ export default function Page() {
         });
         await proceedWithBooking();
       } catch (err) {
+        const raw =
+          err instanceof Error
+            ? err.message
+            : language === "en"
+              ? "Payment failed"
+              : "Betaling mislyktes";
         setMatchError(
           mapAuthGateCopy(
-            err instanceof Error
-              ? err.message
-              : language === "en"
-                ? "Payment failed"
-                : "Betaling mislyktes",
+            bookingPaymentUserMessage(raw, language === "en"),
             language === "en",
           ),
         );
@@ -14276,7 +14278,9 @@ export default function Page() {
           setIsLoggedIn(false);
         }}
         currentMode={userMode}
-        canSwitchModes={accountRolesUi.can_switch_modes || !loggedInUser?.id}
+        canSwitchModes={
+          accountRolesUi.can_switch_modes || !loggedInUser?.id
+        }
         hasCustomerRole={accountRolesUi.has_customer}
         hasProviderRole={accountRolesUi.has_provider}
         onBecomeProvider={() => {
@@ -14291,7 +14295,9 @@ export default function Page() {
               const token = data?.session?.access_token as string | undefined;
               await fetch("/api/customers/ensure", {
                 method: "POST",
-                headers: token ? { Authorization: `Bearer ${token}` } : {},
+                headers: token
+                  ? { Authorization: `Bearer ${token}` }
+                  : {},
               });
               const roles = await fetchAccountRoles({
                 accessToken: token,

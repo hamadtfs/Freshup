@@ -97,7 +97,7 @@ export async function evaluateProviderOnlineGate(
 
   const grants = await listAccountRoleGrants(supabase, providerId);
   const providerGrant = grants.find((g) => g.role === "provider");
-  if (providerGrant && providerGrant.status !== "active") {
+  if (!providerGrant || providerGrant.status !== "active") {
     return { ok: false, error: "ADMIN_PENDING" };
   }
 

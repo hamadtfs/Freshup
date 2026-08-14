@@ -1,4 +1,5 @@
 import { loadStripe } from "@stripe/stripe-js";
+import { bookingPaymentUserMessage } from "@/lib/payments/booking-payment-errors";
 
 const publishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || "";
 
@@ -82,7 +83,9 @@ export async function confirmBookingWithSavedCard(
     payment_method: paymentMethodId,
   });
   if (result.error) {
-    throw new Error(result.error.message ?? "Payment failed");
+    throw new Error(
+      bookingPaymentUserMessage(result.error.message ?? "Payment failed", true),
+    );
   }
 }
 

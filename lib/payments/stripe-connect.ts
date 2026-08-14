@@ -57,6 +57,10 @@ export async function ensureStripeConnectAccount(
         transfers: { requested: true },
       },
       business_type: "individual",
+      business_profile: {
+        name: "Fresh Up AS",
+        product_description: "On-demand local services via Fresh Up",
+      },
       metadata: {
         freshup_provider_id: providerId,
       },
@@ -106,6 +110,13 @@ export async function createStripeConnectAccountLink(
 
   return link.url;
 }
+
+/**
+ * Connect hosted onboarding branding ("Testing sandbox" in test mode) is the
+ * platform brand in Stripe Dashboard → Settings → Connect → Branding, not
+ * this Account Link. Test KYC values: https://docs.stripe.com/connect/testing
+ * Norway payout IBAN: NO9386011117947. Personal ID: 000000000.
+ */
 
 export async function syncProviderFromStripeAccount(
   supabase: SupabaseClient,

@@ -52,6 +52,17 @@ export async function upsertAccountRoleGrant(
   role: DashboardMode,
   status: RoleGrantStatus,
 ): Promise<{ ok: boolean; error?: string }> {
+  const existing = (await listAccountRoleGrants(supabase, userId)).find(
+    (g) => g.role === role,
+  )
+  // Never downgrade active / suspended to pending (skills save / Connect).
+  if (
+    status === "pending" &&
+    (existing?.status === "active" || existing?.status === "suspended")
+  ) {
+    return { ok: true }
+  }
+
   const { error: rpcErr } = await supabase.rpc("upsert_account_role_grant", {
     p_user_id: userId,
     p_role: role,

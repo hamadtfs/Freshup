@@ -232,9 +232,16 @@ export async function confirmBookingPayment(
       use_stripe_sdk: true,
     });
   } catch (err) {
-    const message =
+    const raw =
       err instanceof Error ? err.message : "PAYMENT_CONFIRM_FAILED";
-    return { ok: false, error: message, status: 402 };
+    const { bookingPaymentUserMessage } = await import(
+      "@/lib/payments/booking-payment-errors"
+    );
+    return {
+      ok: false,
+      error: bookingPaymentUserMessage(raw, true),
+      status: 402,
+    };
   }
 
   await supabase
