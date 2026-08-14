@@ -20,6 +20,11 @@ import {
   writeStoredDashboardMode,
 } from "@/lib/auth/dashboard-mode";
 import {
+  peekLoginRoleIntent,
+  takeLoginRoleIntent,
+  writeLoginRoleIntent,
+} from "@/lib/auth/login-role-intent";
+import {
   fetchAccountRoles,
   setActiveRoleClaim,
 } from "@/lib/auth/fetch-account-roles";
@@ -1120,21 +1125,17 @@ function parseOfferDistanceKm(distanceLabel: unknown): number {
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
-function resolveUserModeFromMetadata(sessionUser: {
-  user_metadata?: any;
-  app_metadata?: any;
-}): "customer" | "provider" {
-  return metadataRoleFromUser(sessionUser) ?? "customer";
-}
-
 function resolveDashboardMode(sessionUser: {
   id: string;
   user_metadata?: any;
   app_metadata?: any;
 }): "customer" | "provider" {
-  // Preference cache only — applySession re-resolves from /api/auth/roles.
-  const stored = readStoredDashboardMode(sessionUser.id);
-  return stored ?? resolveUserModeFromMetadata(sessionUser);
+  return (
+    peekLoginRoleIntent() ??
+    metadataRoleFromUser(sessionUser) ??
+    readStoredDashboardMode(sessionUser.id) ??
+    "customer"
+  );
 }
 
 async function resolveDashboardModeFromServer(
@@ -6384,13 +6385,25 @@ export default function Page() {
       setIsLoggedIn(!!nextUser);
       if (nextUser) {
         const token = session?.access_token as string | undefined;
-        // Optimistic from cache, then correct from server roles.
+        const loginIntent = peekLoginRoleIntent();
+        // Optimistic from JWT / login intent, then correct from server roles.
         const optimistic = resolveDashboardMode(nextUser);
         setUserMode(optimistic);
         refreshProviderOnlineFromDb(nextUser.id, optimistic);
-        void resolveDashboardModeFromServer(nextUser, token).then((mode) => {
+        void resolveDashboardModeFromServer(
+          nextUser,
+          token,
+          loginIntent,
+        ).then(async (mode) => {
           setUserMode(mode);
           refreshProviderOnlineFromDb(nextUser.id, mode);
+          if (loginIntent) {
+            const claim = await setActiveRoleClaim(mode, {
+              accessToken: token,
+            });
+            if (claim.ok) await supabase.auth.refreshSession();
+            takeLoginRoleIntent();
+          }
           if (mode === "provider") {
             void supabase.auth.updateUser({ data: { app_role: "provider" } });
           }
@@ -7038,6 +7051,7 @@ export default function Page() {
   // active skills are present — no separate GET /api/providers/me needed here.
 
   const handleLogout = useCallback(async () => {
+    takeLoginRoleIntent();
     if (loggedInUser?.id) clearStoredDashboardMode(loggedInUser.id);
     setIsProviderOnline(false);
     if (hasSupabase) {
@@ -13628,6 +13642,11 @@ export default function Page() {
                 userType,
               );
               writeStoredDashboardMode(uid, mode);
+              const claim = await setActiveRoleClaim(mode, {
+                accessToken: token,
+              });
+              if (claim.ok) await supabase.auth.refreshSession();
+              takeLoginRoleIntent();
               setUser(session.user);
               if (mode === "provider") {
                 const hydrated = mergeSkillsFromLocalSnapshot(uid, [], []);
@@ -13686,64 +13705,34 @@ export default function Page() {
   };
 
   const handleModeChange = (mode: "customer" | "provider") => {
-    if (loggedInUser?.id && !accountRolesUi.can_switch_modes) return;
-    if (loggedInUser?.id) writeStoredDashboardMode(loggedInUser.id, mode);
-    if (hasSupabase && loggedInUser?.id) {
-      void (async () => {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const token = sessionData?.session?.access_token;
-        const claim = await setActiveRoleClaim(mode, { accessToken: token });
-        if (claim.ok) {
-          await supabase.auth.refreshSession();
-        }
-        if (mode === "customer" && userMode === "provider") {
-          providerOnlineHydrateGenRef.current += 1;
-          setIsProviderOnline(false);
-          await fetch("/api/providers/online", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-provider-id": loggedInUser.id,
-            },
-            body: JSON.stringify({ is_online: false }),
-          }).catch(() => {});
-        } else if (mode === "provider" && userMode === "customer") {
-          providerOnlineHydrateGenRef.current += 1;
-          const pos = providerBrowseGeolocRef.current;
-          await fetch("/api/providers/online", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-provider-id": loggedInUser.id,
-            },
-            body: JSON.stringify({
-              is_online: true,
-              ...(pos &&
-              typeof pos.lat === "number" &&
-              typeof pos.lng === "number"
-                ? { lat: pos.lat, lng: pos.lng }
-                : {}),
-            }),
-          })
-            .then(async (res) => {
-              const json = (await res.json().catch(() => ({}))) as {
-                is_online?: boolean;
-              };
-              const live = res.ok && json.is_online === true;
-              providerOnlineHydrateGenRef.current += 1;
-              setIsProviderOnline(live);
-              if (live) providerSyncPendingOffersRef.current?.(true);
-            })
-            .catch(() => {
-              providerOnlineHydrateGenRef.current += 1;
-              setIsProviderOnline(false);
-            });
-        }
-      })();
+    if (!loggedInUser?.id) {
+      writeLoginRoleIntent(mode);
+      setUserMode(mode);
+      setShowMenu(false);
+      return;
     }
-    setUserMode(mode);
-    setStep("map");
-    setShowMenu(false);
+    if (!accountRolesUi.can_switch_modes) return;
+    if (mode === userMode) {
+      setShowMenu(false);
+      return;
+    }
+    writeLoginRoleIntent(mode);
+    void (async () => {
+      if (userMode === "provider") {
+        providerOnlineHydrateGenRef.current += 1;
+        setIsProviderOnline(false);
+        await fetch("/api/providers/online", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-provider-id": loggedInUser.id,
+          },
+          body: JSON.stringify({ is_online: false }),
+        }).catch(() => {});
+      }
+      await handleLogout();
+      writeLoginRoleIntent(mode);
+    })();
   };
 
   // Back to menu handler

@@ -619,6 +619,7 @@ export default function HamburgerMenu({
         {/* Bottom */}
         <div className="p-5 border-t border-border space-y-3">
           {canSwitchModes ? (
+            <div className="space-y-2">
             <div className="flex items-center justify-between p-3 rounded-xl bg-muted/50">
               <span className="text-sm font-medium text-muted-foreground">
                 {isEn ? "Mode" : "Modus"}
@@ -645,6 +646,14 @@ export default function HamburgerMenu({
                   {isEn ? "Provider" : "Tilbyder"}
                 </button>
               </div>
+            </div>
+            {signedIn ? (
+              <p className="px-1 text-[11px] leading-4 text-muted-foreground">
+                {isEn
+                  ? "Switching role logs you out. Log in again as the other role."
+                  : "Bytte av rolle logger deg ut. Logg inn igjen som den andre rollen."}
+              </p>
+            ) : null}
             </div>
           ) : (
             <div className="space-y-2">
