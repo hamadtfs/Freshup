@@ -11,6 +11,7 @@ import {
   Shield,
   ChevronRight,
   Camera,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
@@ -127,6 +128,7 @@ export default function ProfilePage({
     useState<LocationTarget>("default");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const t = useMemo(() => {
     if (language === "en") {
@@ -170,6 +172,15 @@ export default function ProfilePage({
           "Do you allow Google Maps to open and use your current location?",
         cancel: "Cancel",
         allow: "Allow",
+        deleteAccount: "Delete account",
+        deleteAccountTitle: "Delete your account?",
+        deleteAccountBody:
+          "This removes your personal data and anonymises your profile. Orders are kept for accounting and audit. This cannot be undone.",
+        deleteAccountConfirm: "Delete account",
+        deleteAccountBusy: "Deleting…",
+        deleteAccountOpenJobs:
+          "Finish or cancel open jobs before deleting your account.",
+        deleteAccountFailed: "Could not delete account. Try again.",
       } as const;
     }
     return {
@@ -212,6 +223,15 @@ export default function ProfilePage({
         "Tillater du at Google Maps åpner og bruker nåværende lokasjon?",
       cancel: "Avbryt",
       allow: "Tillat",
+      deleteAccount: "Slett konto",
+      deleteAccountTitle: "Slette kontoen din?",
+      deleteAccountBody:
+        "Dette fjerner personopplysningene dine og anonymiserer profilen. Bestillinger beholdes for regnskap og revisjon. Dette kan ikke angres.",
+      deleteAccountConfirm: "Slett konto",
+      deleteAccountBusy: "Sletter…",
+      deleteAccountOpenJobs:
+        "Fullfør eller avbryt åpne oppdrag før du sletter kontoen.",
+      deleteAccountFailed: "Kunne ikke slette kontoen. Prøv igjen.",
     } as const;
   }, [language]);
 
@@ -790,6 +810,38 @@ export default function ProfilePage({
     }
   };
 
+  const onDeleteAccount = async () => {
+    if (deleting) return;
+    const ok = window.confirm(`${t.deleteAccountTitle}\n\n${t.deleteAccountBody}`);
+    if (!ok) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data?.session?.access_token as string | undefined;
+      const res = await fetch("/api/account/delete", {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) {
+        throw new Error(
+          body.error === "OPEN_ORDERS"
+            ? t.deleteAccountOpenJobs
+            : t.deleteAccountFailed,
+        );
+      }
+      await supabase.auth.signOut({ scope: "global" });
+      window.location.assign("/");
+    } catch (err: unknown) {
+      setError(
+        err instanceof Error ? err.message : t.deleteAccountFailed,
+      );
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const openLocationPicker = async (target: LocationTarget = "default") => {
     setError(null);
     setMessage(null);
@@ -1124,6 +1176,21 @@ export default function ProfilePage({
           <p className="text-xs text-gray-500">{t.loggedInAs}</p>
           <p className="text-sm font-semibold text-gray-900">
             {userMode === "provider" ? t.provider : t.customer}
+          </p>
+        </div>
+
+        <div className="mt-6 space-y-2 pb-4">
+          <button
+            type="button"
+            disabled={loading || saving || deleting}
+            onClick={() => void onDeleteAccount()}
+            className="w-full flex items-center justify-center gap-2 rounded-xl border border-red-200 bg-white p-4 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60"
+          >
+            <Trash2 className="h-4 w-4" />
+            {deleting ? t.deleteAccountBusy : t.deleteAccount}
+          </button>
+          <p className="px-1 text-xs leading-5 text-gray-500">
+            {t.deleteAccountBody}
           </p>
         </div>
       </div>

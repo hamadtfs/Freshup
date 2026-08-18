@@ -384,9 +384,10 @@ inspector_port = 8083
 # The Deno major version to use.
 deno_version = 2
 
-# Send SMS hook: Auth calls this Edge Function instead of Twilio/MessageBird.
+# Send SMS hook: Auth calls this Edge Function instead of the built-in provider.
+# The function sends via Twilio (TWILIO_ACCOUNT_SID / AUTH_TOKEN / MESSAGING_SERVICE_SID).
 # Deploy: supabase functions deploy send-sms-hook --no-verify-jwt
-# Set secret SMS_DEV_LOG_OTP=true in dashboard to log OTP to function logs (dev only).
+# Hosted: Dashboard → Auth → Hooks → Send SMS must point at this function.
 [functions.send-sms-hook]
 verify_jwt = false
 

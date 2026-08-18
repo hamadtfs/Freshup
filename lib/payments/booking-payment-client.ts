@@ -89,6 +89,7 @@ export async function confirmBookingWithSavedCard(
   }
 }
 
+/** Web Apple Pay via Payment Request. Blocked until the live domain is registered — see docs/apple-pay-outstanding.md. */
 export async function confirmBookingWithApplePay(
   clientSecret: string,
   amountKr: number,

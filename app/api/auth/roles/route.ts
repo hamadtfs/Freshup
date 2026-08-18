@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
     const grants = await listAccountRoleGrants(supabase, userId)
     const byRole = new Map(grants.map((g) => [g.role, g.status] as const))
 
-    const [{ data: provider }, { data: skillRow }, { data: authUser }] =
+    const [{ data: provider }, { data: skillRows }, { data: authUser }] =
       await Promise.all([
         supabase
           .from("provider_details")
@@ -39,10 +39,10 @@ export async function GET(req: NextRequest) {
           .from("provider_skills")
           .select("id")
           .eq("provider_id", userId)
-          .limit(1)
-          .maybeSingle(),
+          .limit(1),
         supabase.auth.admin.getUserById(userId),
       ])
+    const skillRow = skillRows?.[0] ?? null
 
     const customerStatus: RoleGrantStatus | null = byRole.get("customer") ?? null
     const providerStatus: RoleGrantStatus | null = byRole.get("provider") ?? null

@@ -129,7 +129,8 @@ Payment page → Add card
 
 ## 8. Non-goals (defer)
 
-- Apple Pay / Vipps production integration (UI placeholders removed; cards only via Stripe).
+- **Apple Pay** — not live. Domain registration + remaining work: `docs/apple-pay-outstanding.md`.
+- Vipps production integration.
 - Provider payouts / Stripe Connect transfers.
 - Refunds UI and dispute workflow.
 - PCI beyond Stripe Elements (no raw card fields in app code).

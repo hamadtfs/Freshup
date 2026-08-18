@@ -8,6 +8,14 @@
 /** FreshUp commission rate applied to main service & add-ons (spec §2.2, §2.5). */
 export const FRESHUP_COMMISSION_PCT = 0.20;
 
+/**
+ * Loyalty and referral rewards waive this commission on one booking (customer pays
+ * provider net; the provider still receives their full amount). Loyalty unlocks
+ * after this many completed bookings. Referral unlocks after the invited person
+ * completes their first booking.
+ */
+export const LOYALTY_DISCOUNT_BOOKINGS = 2;
+
 /** Provider keep ratio = 1 - commission. Customer price = provider_price / PROVIDER_KEEP_RATIO. */
 export const PROVIDER_KEEP_RATIO = 1 - FRESHUP_COMMISSION_PCT; // 0.80
 

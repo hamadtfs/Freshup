@@ -5,7 +5,8 @@ import { NextRequest, NextResponse } from "next/server"
 
 /**
  * POST — ensure this account can book as a customer (provider-only → dual mode).
- * Creates customer_details if missing and activates the customer role grant.
+ * Activates the customer role grant. customer_details is created on first
+ * booking / Stripe customer, not here at role switch.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -13,14 +14,6 @@ export async function POST(req: NextRequest) {
     const userId = await getUserIdFromBearer(supabase, req)
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
-
-    const { error: detailsErr } = await supabase
-      .from("customer_details")
-      .upsert({ id: userId }, { onConflict: "id" })
-    if (detailsErr) {
-      console.error("[customers/ensure] customer_details", detailsErr)
-      return NextResponse.json({ error: "ensure_failed" }, { status: 500 })
     }
 
     const grant = await upsertAccountRoleGrant(

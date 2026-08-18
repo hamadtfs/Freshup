@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { cn } from "@/lib/utils"
-import { ChevronLeft, MessageCircle, Phone, Mail, ChevronDown } from "lucide-react"
+import { ChevronLeft, Lock, Mail, ChevronDown } from "lucide-react"
 
 interface SupportPageProps {
   onBack: () => void
@@ -13,7 +13,6 @@ interface SupportPageProps {
 export default function SupportPage({
   onBack,
   language = "no",
-  onOpenChat,
 }: SupportPageProps) {
   const isEn = language === "en"
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null)
@@ -21,30 +20,21 @@ export default function SupportPage({
   const CONTACT_OPTIONS = [
     {
       id: "chat",
-      icon: MessageCircle,
+      icon: Lock,
       title: isEn ? "Chat with us" : "Chat med oss",
-      subtitle: isEn ? "Reply within 5 min" : "Svar innen 5 min",
-      onClick: onOpenChat,
-    },
-    {
-      id: "phone",
-      icon: Phone,
-      title: isEn ? "Call us" : "Ring oss",
-      subtitle: "+47 123 45 678",
-      onClick: () => {
-        if (typeof window !== "undefined") {
-          window.location.href = "tel:+4712345678"
-        }
-      },
+      subtitle: isEn ? "Currently closed" : "Stengt",
+      locked: true,
+      onClick: undefined as (() => void) | undefined,
     },
     {
       id: "email",
       icon: Mail,
       title: isEn ? "Send email" : "Send e-post",
-      subtitle: "support@freshup.no",
+      subtitle: "support@freshup.app",
+      locked: false,
       onClick: () => {
         if (typeof window !== "undefined") {
-          window.location.href = "mailto:support@freshup.no"
+          window.location.href = "mailto:support@freshup.app"
         }
       },
     },
@@ -111,7 +101,13 @@ export default function SupportPage({
               key={option.id}
               type="button"
               onClick={option.onClick}
-              className="w-full flex items-center gap-4 bg-card border border-border p-4 rounded-xl hover:bg-muted/50 transition-colors"
+              disabled={option.locked || !option.onClick}
+              className={cn(
+                "w-full flex items-center gap-4 bg-card border border-border p-4 rounded-xl transition-colors",
+                option.locked
+                  ? "opacity-55 cursor-not-allowed"
+                  : "hover:bg-muted/50",
+              )}
             >
               <div className="w-11 h-11 bg-muted rounded-lg flex items-center justify-center">
                 <option.icon className="h-5 w-5 text-muted-foreground" />

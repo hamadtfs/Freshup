@@ -3,6 +3,8 @@
 import { useState } from "react"
 import { cn } from "@/lib/utils"
 import { formatDisplayPrice } from "@/lib/pricing/format-display-kr"
+import { LOYALTY_DISCOUNT_BOOKINGS } from "@/lib/pricing/constants"
+import { createBrowserSupabaseClient } from "@/lib/supabase/client"
 import {
   X,
   CreditCard,
@@ -26,6 +28,7 @@ import {
   Share2,
   ShieldCheck,
   Wallet,
+  Trash2,
 } from "lucide-react"
 type UserMode = "customer" | "provider"
 type Language = "no" | "en"
@@ -103,7 +106,7 @@ export default function HamburgerMenu({
   userName = "User",
   userAvatarUrl,
   userRating = 4.5,
-  rewardProgress = 3,
+  rewardProgress = 0,
   providerEarningsToday = 0,
   providerEarningsWeek = 8750,
   providerCompletedJobs = 47,
@@ -117,8 +120,28 @@ export default function HamburgerMenu({
   const isEn = language === "en"
   const [showStats, setShowStats] = useState(false)
   const [showResponseInfo, setShowResponseInfo] = useState(false)
+  const [roleSwitchTarget, setRoleSwitchTarget] = useState<UserMode | null>(
+    null,
+  )
+
+  const requestModeChange = (mode: UserMode) => {
+    if (mode === currentMode) return
+    if (!signedIn) {
+      onModeChange(mode)
+      return
+    }
+    setRoleSwitchTarget(mode)
+  }
 
   const formatPrice = (price: number) => formatDisplayPrice(price, language)
+  const loyaltyProgress = Math.min(
+    LOYALTY_DISCOUNT_BOOKINGS,
+    Math.max(0, rewardProgress),
+  )
+  const loyaltyBookingsLeft = Math.max(
+    0,
+    LOYALTY_DISCOUNT_BOOKINGS - loyaltyProgress,
+  )
 
   const statsPending =
     currentMode === "provider" && (providerStatsLoading || !providerStats)
@@ -479,6 +502,15 @@ export default function HamburgerMenu({
   }
 
   // Main Menu
+  const roleSwitchTitle =
+    roleSwitchTarget === "provider"
+      ? isEn
+        ? "Log in as provider"
+        : "Logg inn som tilbyder"
+      : isEn
+        ? "Log in as customer"
+        : "Logg inn som kunde"
+
   return (
     <>
       <div className="fixed inset-0 bg-black/50 z-50" onClick={onClose} />
@@ -526,30 +558,67 @@ export default function HamburgerMenu({
         <div className="px-5 pb-4">
           {currentMode === "customer" ? (
             <div className="space-y-2">
-              {/* Rewards progress */}
+              {/* Loyalty: 20% off (commission waived) after 2 bookings */}
               <div className="bg-foreground text-background rounded-2xl p-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-xs text-background/60">{isEn ? "Free service in" : "Gratis tjeneste om"}</p>
-                    <p className="text-2xl font-bold">{5 - rewardProgress} {isEn ? "bookings" : "bestillinger"}</p>
+                    <p className="text-xs text-background/60">
+                      {loyaltyBookingsLeft > 0
+                        ? isEn
+                          ? "20% off in"
+                          : "20 % rabatt om"
+                        : isEn
+                          ? "20% off unlocked"
+                          : "20 % rabatt opplåst"}
+                    </p>
+                    <p className="text-2xl font-bold">
+                      {loyaltyBookingsLeft > 0
+                        ? `${loyaltyBookingsLeft} ${
+                            loyaltyBookingsLeft === 1
+                              ? isEn
+                                ? "booking"
+                                : "bestilling"
+                              : isEn
+                                ? "bookings"
+                                : "bestillinger"
+                          }`
+                        : isEn
+                          ? "Next booking"
+                          : "Neste booking"}
+                    </p>
                   </div>
                   <div className="flex gap-1">
-                    {[1, 2, 3, 4, 5].map((i) => (
-                      <div key={i} className={cn("w-2 h-8 rounded-full", i <= rewardProgress ? "bg-primary" : "bg-background/20")} />
+                    {Array.from(
+                      { length: LOYALTY_DISCOUNT_BOOKINGS },
+                      (_, i) => i + 1,
+                    ).map((i) => (
+                      <div
+                        key={i}
+                        className={cn(
+                          "w-2 h-8 rounded-full",
+                          i <= loyaltyProgress
+                            ? "bg-primary"
+                            : "bg-background/20",
+                        )}
+                      />
                     ))}
                   </div>
                 </div>
               </div>
-              {/* Referral */}
+              {/* Referral: 20% off after invited person completes first booking */}
               <button className="w-full bg-primary/10 border border-primary/20 rounded-2xl p-4 flex items-center gap-3 text-left hover:bg-primary/15 transition-colors">
                 <div className="w-10 h-10 bg-primary/20 rounded-xl flex items-center justify-center">
                   <Gift className="h-5 w-5 text-primary" />
                 </div>
-                <div className="flex-1">
-                  <p className="text-sm font-semibold text-foreground">{isEn ? "Invite friends" : "Inviter venner"}</p>
-                  <p className="text-xs text-muted-foreground">{isEn ? "Get 100 kr for each friend" : "Få 100 kr per venn"}</p>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-foreground">{isEn ? "Invite a friend" : "Inviter en venn"}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {isEn
+                      ? "20% off a service of your choice after they complete their first booking"
+                      : "20 % rabatt på en tjeneste etter at de fullfører sin første booking"}
+                  </p>
                 </div>
-                <Share2 className="h-4 w-4 text-muted-foreground" />
+                <Share2 className="h-4 w-4 text-muted-foreground shrink-0" />
               </button>
             </div>
           ) : statsPending ? (
@@ -627,7 +696,7 @@ export default function HamburgerMenu({
               <div className="bg-muted rounded-full p-1 flex">
                 <button
                   type="button"
-                  onClick={() => currentMode !== "customer" && onModeChange("customer")}
+                  onClick={() => requestModeChange("customer")}
                   className={cn(
                     "px-3 py-1.5 rounded-full text-xs font-medium transition-all",
                     currentMode === "customer" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"
@@ -637,7 +706,7 @@ export default function HamburgerMenu({
                 </button>
                 <button
                   type="button"
-                  onClick={() => currentMode !== "provider" && onModeChange("provider")}
+                  onClick={() => requestModeChange("provider")}
                   className={cn(
                     "px-3 py-1.5 rounded-full text-xs font-medium transition-all",
                     currentMode === "provider" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"
@@ -717,8 +786,106 @@ export default function HamburgerMenu({
               <span className="font-medium">{isEn ? "Log in" : "Logg inn"}</span>
             </button>
           )}
+          {signedIn ? (
+            <button
+              onClick={() => {
+                const title = isEn ? "Delete your account?" : "Slette kontoen din?"
+                const body = isEn
+                  ? "This removes your personal data and anonymises your profile. Orders are kept for accounting and audit. This cannot be undone."
+                  : "Dette fjerner personopplysningene dine og anonymiserer profilen. Bestillinger beholdes for regnskap og revisjon. Dette kan ikke angres."
+                if (!window.confirm(`${title}\n\n${body}`)) return
+                void (async () => {
+                  try {
+                    const supabase = createBrowserSupabaseClient()
+                    const { data } = await supabase.auth.getSession()
+                    const token = data?.session?.access_token
+                    const res = await fetch("/api/account/delete", {
+                      method: "POST",
+                      headers: token
+                        ? { Authorization: `Bearer ${token}` }
+                        : {},
+                    })
+                    const payload = (await res.json().catch(() => ({}))) as {
+                      error?: string
+                    }
+                    if (!res.ok) {
+                      const msg =
+                        payload.error === "OPEN_ORDERS"
+                          ? isEn
+                            ? "Finish or cancel open jobs before deleting your account."
+                            : "Fullfør eller avbryt åpne oppdrag før du sletter kontoen."
+                          : isEn
+                            ? "Could not delete account. Try again."
+                            : "Kunne ikke slette kontoen. Prøv igjen."
+                      window.alert(msg)
+                      return
+                    }
+                    onLogout()
+                  } catch {
+                    window.alert(
+                      isEn
+                        ? "Could not delete account. Try again."
+                        : "Kunne ikke slette kontoen. Prøv igjen.",
+                    )
+                  }
+                })()
+              }}
+              className="w-full flex items-center gap-4 p-3 rounded-xl hover:bg-muted transition-colors text-red-500"
+            >
+              <Trash2 className="h-5 w-5" />
+              <span className="font-medium">
+                {isEn ? "Delete account" : "Slett konto"}
+              </span>
+            </button>
+          ) : null}
         </div>
       </div>
+
+      {roleSwitchTarget ? (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="role-switch-title"
+        >
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/50"
+            aria-label={isEn ? "Cancel" : "Avbryt"}
+            onClick={() => setRoleSwitchTarget(null)}
+          />
+          <div className="relative z-[81] w-full max-w-sm rounded-2xl bg-background p-5 shadow-2xl">
+            <h3 id="role-switch-title" className="text-base font-semibold">
+              {roleSwitchTitle}
+            </h3>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {isEn
+                ? "Switching role signs you out. Log in again as the other role."
+                : "Bytte av rolle logger deg ut. Logg inn igjen som den andre rollen."}
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setRoleSwitchTarget(null)}
+                className="rounded-xl px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted"
+              >
+                {isEn ? "Cancel" : "Avbryt"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = roleSwitchTarget
+                  setRoleSwitchTarget(null)
+                  onModeChange(next)
+                }}
+                className="rounded-xl bg-red-500 px-4 py-2 text-sm font-semibold text-white hover:bg-red-600"
+              >
+                {isEn ? "Log out" : "Logg ut"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   )
 }

@@ -197,12 +197,12 @@ export default function TransactionDetailPage({
   };
 
   const paymentSupportHref = detail
-    ? `mailto:support@freshup.no?subject=${encodeURIComponent(
+    ? `mailto:support@freshup.app?subject=${encodeURIComponent(
         isEn
           ? `Payment help · ${detail.invoice_reference}`
           : `Betalingshjelp · ${detail.invoice_reference}`,
       )}`
-    : "mailto:support@freshup.no";
+    : "mailto:support@freshup.app";
 
   return (
     <main className="mx-auto h-[100dvh] w-full max-w-md bg-background flex flex-col">

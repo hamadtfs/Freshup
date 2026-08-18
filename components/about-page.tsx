@@ -1,6 +1,6 @@
 "use client"
 
-import { ChevronLeft, Mail, MapPin, Phone, Headphones } from "lucide-react"
+import { ChevronLeft, Mail, MapPin, Headphones } from "lucide-react"
 
 interface AboutPageProps {
   onBack: () => void
@@ -22,21 +22,10 @@ export default function AboutPage({
       id: "email",
       icon: Mail,
       label: isEn ? "Email" : "E-post",
-      value: "kontakt@freshup.no",
+      value: "contact@freshup.app",
       onClick: () => {
         if (typeof window !== "undefined") {
-          window.location.href = "mailto:kontakt@freshup.no"
-        }
-      },
-    },
-    {
-      id: "phone",
-      icon: Phone,
-      label: isEn ? "Phone" : "Telefon",
-      value: "+47 123 45 678",
-      onClick: () => {
-        if (typeof window !== "undefined") {
-          window.location.href = "tel:+4712345678"
+          window.location.href = "mailto:contact@freshup.app"
         }
       },
     },
@@ -241,8 +230,8 @@ export default function AboutPage({
                 </p>
                 <p className="text-xs text-muted-foreground">
                   {isEn
-                    ? "Open Support for chat, phone, and FAQ"
-                    : "Åpne Kundeservice for chat, telefon og FAQ"}
+                    ? "Open Support for email and FAQ"
+                    : "Åpne Kundeservice for e-post og FAQ"}
                 </p>
               </div>
             </button>

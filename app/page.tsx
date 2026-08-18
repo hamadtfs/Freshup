@@ -14319,7 +14319,6 @@ export default function Page() {
         userName={hamburgerUserName}
         userAvatarUrl={userAvatarUrl}
         userRating={4.5}
-        rewardProgress={3}
         providerEarningsToday={providerEarningsToday}
         providerEarningsWeek={8750}
         providerCompletedJobs={47}
@@ -16200,7 +16199,7 @@ export default function Page() {
                 </div>
 
                 {/* Demand indicator - center */}
-                <div className="flex justify-center pb-1 px-4">
+                <div className="flex justify-center pt-1 pb-3 px-4">
                   {renderTopDemandIndicator()}
                 </div>
 
@@ -16318,7 +16317,7 @@ export default function Page() {
                     </div>
                   </div>
 
-                  <div className="flex justify-center pb-2 px-4">
+                  <div className="flex justify-center pt-1 pb-3 px-4">
                     {renderTopDemandIndicator()}
                   </div>
 
