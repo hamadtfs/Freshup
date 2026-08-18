@@ -57,6 +57,8 @@ export class OpenOrdersError extends Error {
 /**
  * Anonymise a user in place. Orders / payments / payouts stay (accounting).
  * Do not delete auth.users — that CASCADE-deletes customer orders.
+ * Login identities (Google / Apple / phone) must be unlinked so the same
+ * Gmail or phone can sign up again; otherwise Auth signs into the banned user.
  */
 export async function anonymizeAccount(
   supabase: SupabaseClient,
@@ -198,6 +200,10 @@ export async function anonymizeAccount(
     .update({ status: "suspended", updated_at: now })
     .eq("user_id", userId);
 
+  // Unlink Google / Apple / phone *before* the ban. Auth otherwise keeps the
+  // identity on the banned user and the next login returns "user is banned".
+  await unlinkLoginIdentities(supabase, userId);
+
   const tombstoneEmail = `deleted-${userId.replace(/-/g, "")}@deleted.invalid`;
   const { data: existing } = await supabase.auth.admin.getUserById(userId);
   const prevApp = (existing?.user?.app_metadata ?? {}) as Record<string, unknown>;
@@ -233,9 +239,97 @@ export async function anonymizeAccount(
     }
   }
 
+  await unlinkLoginIdentities(supabase, userId);
+
   try {
     await supabase.auth.admin.signOut(userId, "global");
   } catch {
     /* older auth admin APIs omit signOut */
+  }
+}
+
+/** Drop OAuth / phone identities so the same login can create a new user. */
+async function unlinkLoginIdentities(
+  supabase: SupabaseClient,
+  userId: string,
+) {
+  const { error: rpcErr } = await supabase.rpc(
+    "unlink_deleted_user_login_identities",
+    { p_user_id: userId },
+  );
+  if (rpcErr && !missingRelation(rpcErr)) {
+    console.warn("[account/delete] unlink rpc:", rpcErr.message);
+  }
+
+  const { data } = await supabase.auth.admin.getUserById(userId);
+  const identities = data?.user?.identities ?? [];
+  const authUrl = (
+    process.env.SUPABASE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    ""
+  ).replace(/\/$/, "");
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+
+  for (const identity of identities) {
+    const provider = String(identity.provider || "");
+    if (provider === "email") continue;
+    const candidates = [
+      (identity as { identity_id?: string }).identity_id,
+      identity.id,
+    ]
+      .map((v) => String(v || "").trim())
+      .filter(Boolean);
+
+    let unlinked = false;
+    for (const identityId of candidates) {
+      const { error } = await supabase.auth.admin.deleteUserIdentity(
+        userId,
+        identityId,
+      );
+      if (!error) {
+        unlinked = true;
+        break;
+      }
+      if (authUrl && serviceKey) {
+        const res = await fetch(
+          `${authUrl}/auth/v1/admin/users/${userId}/identities/${identityId}`,
+          {
+            method: "DELETE",
+            headers: {
+              Authorization: `Bearer ${serviceKey}`,
+              apikey: serviceKey,
+            },
+          },
+        );
+        if (res.ok || res.status === 404) {
+          unlinked = true;
+          break;
+        }
+        console.warn(
+          `[account/delete] unlink ${provider} identity:`,
+          res.status,
+          await res.text().catch(() => ""),
+        );
+      } else {
+        console.warn(
+          `[account/delete] unlink ${provider} identity:`,
+          error.message,
+        );
+      }
+    }
+    if (!unlinked) {
+      console.warn(
+        `[account/delete] still linked ${provider} identity for ${userId}`,
+      );
+    }
+  }
+
+  if (data?.user?.phone) {
+    const { error } = await supabase.auth.admin.updateUserById(userId, {
+      phone: "",
+    });
+    if (error) {
+      console.warn("[account/delete] clear phone:", error.message);
+    }
   }
 }

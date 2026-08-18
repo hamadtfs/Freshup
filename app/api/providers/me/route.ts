@@ -102,6 +102,7 @@ export async function GET(req: NextRequest) {
         pendingOffers,
         completedOrders,
         profileRow,
+        authUser,
       ] = await Promise.all([
           supabase
             .from("provider_modes")
@@ -140,9 +141,10 @@ export async function GET(req: NextRequest) {
             .eq("status", "completed"),
           supabase
             .from("profiles")
-            .select("notification_opt_in")
+            .select("notification_opt_in, email")
             .eq("id", providerId)
             .maybeSingle(),
+          supabase.auth.admin.getUserById(providerId),
         ]);
       if (modes.error) throw modes.error;
       if (targets.error) throw targets.error;
@@ -204,6 +206,19 @@ export async function GET(req: NextRequest) {
           .eq("id", providerId);
       }
 
+      const detailsEmail = normalizeString((provider as any)?.email);
+      const profileEmail = normalizeString((profileRow.data as any)?.email);
+      const authEmail =
+        normalizeString(authUser.data?.user?.email) ||
+        normalizeString(authUser.data?.user?.user_metadata?.email);
+      const email = detailsEmail || profileEmail || authEmail || "";
+      if (provider && email && !detailsEmail) {
+        void supabase
+          .from("provider_details")
+          .update({ email, updated_at: new Date().toISOString() })
+          .eq("id", providerId);
+      }
+
       return NextResponse.json({
         provider: provider || null,
         profile: null,
@@ -214,7 +229,7 @@ export async function GET(req: NextRequest) {
         contact: {
           name: normalizeString((provider as any)?.business_name) || "",
           phone: normalizeString((provider as any)?.phone) || "",
-          email: normalizeString((provider as any)?.email) || "",
+          email,
           avatarUrl: normalizeAvatar((provider as any)?.avatar_url) || "",
           address: normalizeString((provider as any)?.address) || "",
           lat: normalizeCoordinate((provider as any)?.lat),

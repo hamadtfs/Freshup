@@ -10,7 +10,8 @@ import { NextRequest, NextResponse } from "next/server";
  * POST — in-app account deletion (App Store 5.1.1(v)).
  * Removes / anonymises personal data. Orders, payments and payouts are kept
  * for accounting and audit. The auth user is banned, not hard-deleted
- * (hard-delete would CASCADE-wipe customer orders).
+ * (hard-delete would CASCADE-wipe customer orders). Google / Apple / phone
+ * identities are unlinked so the same login can create a new account.
  */
 export async function POST(req: NextRequest) {
   try {

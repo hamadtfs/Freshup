@@ -53,11 +53,10 @@ export async function GET(req: NextRequest) {
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
-    const { data: profile, error } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", userId)
-      .maybeSingle()
+    const [{ data: profile, error }, authUser] = await Promise.all([
+      supabase.from("profiles").select("*").eq("id", userId).maybeSingle(),
+      supabase.auth.admin.getUserById(userId),
+    ])
     if (error) throw error
 
     const location = readProfileLocation(profile as Record<string, unknown> | null)
@@ -65,12 +64,24 @@ export async function GET(req: NextRequest) {
       (profile as { notification_opt_in?: boolean } | null)?.notification_opt_in !==
       false
 
+    const profileEmail = normalizeString((profile as any)?.email)
+    const authEmail =
+      normalizeString(authUser.data?.user?.email) ||
+      normalizeString(authUser.data?.user?.user_metadata?.email)
+    const email = profileEmail || authEmail || ""
+    if (profile && email && !profileEmail) {
+      void supabase
+        .from("profiles")
+        .update({ email, updated_at: new Date().toISOString() })
+        .eq("id", userId)
+    }
+
     return NextResponse.json({
       profile: profile || null,
       contact: {
         name: normalizeString((profile as any)?.display_name) || "",
         phone: normalizeString((profile as any)?.phone) || "",
-        email: normalizeString((profile as any)?.email) || "",
+        email,
         avatarUrl: normalizeAvatar((profile as any)?.avatar_url) || "",
         address: location.address,
         lat: location.lat,

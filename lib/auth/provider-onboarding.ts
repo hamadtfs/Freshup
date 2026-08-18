@@ -88,10 +88,13 @@ export async function persistProviderOnboardingForUser(
     }
   }
 
+  const { data: userData } = await supabase.auth.getUser()
+  const sessionEmail = userData.user?.email?.trim() || ""
   const profilePayload = {
     ...(input.profileName?.trim() ? { name: input.profileName.trim() } : {}),
     ...(input.phoneE164 ? { phone: input.phoneE164 } : {}),
     ...(input.profileAvatarUrl ? { avatarUrl: input.profileAvatarUrl } : {}),
+    ...(sessionEmail ? { email: sessionEmail } : {}),
   }
   if (Object.keys(profilePayload).length > 0) {
     await fetch("/api/providers/me", {
