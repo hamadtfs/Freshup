@@ -63,6 +63,13 @@ export function pickDashboardMode(opts: {
   return "customer";
 }
 
+/** Provider grant exists but skills/onboarding was never finished. */
+export function isProviderSignupIncomplete(
+  roles: Pick<AccountRoles, "has_provider" | "provider_has_skills"> | null,
+): boolean {
+  return Boolean(roles?.has_provider && !roles.provider_has_skills);
+}
+
 export function metadataRoleFromUser(user: {
   user_metadata?: { app_role?: unknown } | null;
   app_metadata?: { app_role?: unknown; active_role?: unknown } | null;

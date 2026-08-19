@@ -4,6 +4,10 @@ import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { completeOAuthSession } from "@/lib/auth/complete-oauth-session"
 import { consumeOAuthPending } from "@/lib/auth/oauth-pending"
+import { fetchAccountRoles } from "@/lib/auth/fetch-account-roles"
+import { writeLoginRoleIntent } from "@/lib/auth/login-role-intent"
+import { setNeedProviderLogin } from "@/lib/auth/need-provider-login"
+import { isProviderSignupIncomplete } from "@/lib/auth/resolve-account-roles"
 import {
   beginProviderSignupInProgress,
   setProviderSignupResumeStep,
@@ -44,15 +48,17 @@ export default function AuthCallbackPage() {
       }
 
       const userId = data.session?.user?.id
+      const accessToken = data.session?.access_token as string | undefined
       if (!userId) {
         if (!cancelled) setError("No session found after sign-in.")
         return
       }
 
+      let pending = null as ReturnType<typeof consumeOAuthPending>
       try {
-        const pending = consumeOAuthPending()
+        pending = consumeOAuthPending()
         await completeOAuthSession(supabase, userId, pending)
-        // Incomplete phone-first provider signup — return to login UI for profile→….
+        // Become-a-provider phone-first signup — resume profile→… after OAuth.
         if (
           pending?.role === "provider" &&
           pending.providerSignupContinue &&
@@ -65,6 +71,30 @@ export default function AuthCallbackPage() {
         const message =
           e instanceof Error ? e.message : "Could not finish sign-in."
         if (!cancelled) setError(message)
+        return
+      }
+
+      const providerLoginIntent =
+        pending?.role === "provider" && pending.providerLoginOnly
+
+      if (providerLoginIntent) {
+        writeLoginRoleIntent("provider")
+        const roles = await fetchAccountRoles({
+          accessToken,
+          intent: "provider",
+        })
+        if (roles?.has_provider && roles.provider_has_skills) {
+          if (!cancelled) router.replace("/")
+          return
+        }
+        if (isProviderSignupIncomplete(roles)) {
+          beginProviderSignupInProgress("profile")
+          setProviderSignupResumeStep("profile")
+          if (!cancelled) router.replace("/")
+          return
+        }
+        setNeedProviderLogin()
+        if (!cancelled) router.replace("/")
         return
       }
 

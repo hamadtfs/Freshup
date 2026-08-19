@@ -2,6 +2,8 @@ import type { ProviderOnboardingInput } from "@/lib/auth/provider-onboarding"
 
 export type OAuthPendingPayload = {
   role: "customer" | "provider"
+  /** Customer-login screen, Provider toggle — do not claim a provider grant. */
+  providerLoginOnly?: boolean
   providerOnboarding?: ProviderOnboardingInput
   /** Phone-first provider signup: resume profile→payment→services after OAuth. */
   providerSignupContinue?: boolean

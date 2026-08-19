@@ -29,9 +29,15 @@ import {
   setActiveRoleClaim,
 } from "@/lib/auth/fetch-account-roles";
 import {
+  isProviderSignupIncomplete,
   metadataRoleFromUser,
   pickDashboardMode,
 } from "@/lib/auth/resolve-account-roles";
+import {
+  clearNeedProviderLogin,
+  peekNeedProviderLogin,
+  setNeedProviderLogin as persistNeedProviderLogin,
+} from "@/lib/auth/need-provider-login";
 import { clearOAuthPending } from "@/lib/auth/oauth-pending";
 import {
   beginProviderSignupInProgress,
@@ -5585,6 +5591,10 @@ export default function Page() {
   const [authReady, setAuthReady] = useState(!hasSupabase);
   const [forceProviderSetup, setForceProviderSetup] = useState(false);
   const [providerSignupGate, setProviderSignupGate] = useState(false);
+  const [needProviderLogin, setNeedProviderLogin] = useState(
+    () =>
+      typeof window !== "undefined" ? peekNeedProviderLogin() : false,
+  );
   const [accountRolesReady, setAccountRolesReady] = useState(false);
   const providerSignupBootstrappedRef = useRef(false);
 
@@ -6382,19 +6392,78 @@ export default function Page() {
     const applySession = (session: any) => {
       const nextUser = session?.user ?? null;
       setUser(nextUser);
-      setIsLoggedIn(!!nextUser);
-      if (nextUser) {
-        const token = session?.access_token as string | undefined;
-        const loginIntent = peekLoginRoleIntent();
-        // Optimistic from JWT / login intent, then correct from server roles.
-        const optimistic = resolveDashboardMode(nextUser);
-        setUserMode(optimistic);
-        refreshProviderOnlineFromDb(nextUser.id, optimistic);
-        void resolveDashboardModeFromServer(
-          nextUser,
-          token,
-          loginIntent,
-        ).then(async (mode) => {
+      if (!nextUser) {
+        setIsLoggedIn(false);
+        setNeedProviderLogin(false);
+        clearNeedProviderLogin();
+        setIsProviderOnline(false);
+        setAccountRolesUi({
+          has_customer: false,
+          has_provider: false,
+          can_switch_modes: false,
+        });
+        setAccountRolesReady(true);
+        return;
+      }
+
+      const token = session?.access_token as string | undefined;
+      const loginIntent = peekLoginRoleIntent();
+      const needProviderFlag = peekNeedProviderLogin();
+      const providerLoginCheck =
+        loginIntent === "provider" || needProviderFlag;
+
+      const optimistic = providerLoginCheck
+        ? "customer"
+        : resolveDashboardMode(nextUser);
+      setUserMode(optimistic);
+      refreshProviderOnlineFromDb(nextUser.id, optimistic);
+
+      void (async () => {
+        const roles = await fetchAccountRoles({
+          accessToken: token,
+          intent: providerLoginCheck ? "provider" : loginIntent,
+        });
+
+        if (providerLoginCheck) {
+          takeLoginRoleIntent();
+          if (roles?.has_provider && roles.provider_has_skills) {
+            clearNeedProviderLogin();
+            setNeedProviderLogin(false);
+            const mode = await resolveDashboardModeFromServer(
+              nextUser,
+              token,
+              "provider",
+            );
+            setUserMode(mode);
+            refreshProviderOnlineFromDb(nextUser.id, mode);
+            setIsLoggedIn(true);
+            const claim = await setActiveRoleClaim(mode, {
+              accessToken: token,
+            });
+            if (claim.ok) await supabase.auth.refreshSession();
+            void supabase.auth.updateUser({
+              data: { app_role: "provider" },
+            });
+          } else if (isProviderSignupIncomplete(roles)) {
+            clearNeedProviderLogin();
+            setNeedProviderLogin(false);
+            setProviderSignupGate(true);
+            setIsLoggedIn(true);
+          } else {
+            persistNeedProviderLogin();
+            setNeedProviderLogin(true);
+            setUserMode("customer");
+            setIsLoggedIn(true);
+          }
+        } else {
+          clearNeedProviderLogin();
+          setNeedProviderLogin(false);
+          setIsLoggedIn(true);
+          const mode = await resolveDashboardModeFromServer(
+            nextUser,
+            token,
+            loginIntent,
+          );
           setUserMode(mode);
           refreshProviderOnlineFromDb(nextUser.id, mode);
           if (loginIntent) {
@@ -6405,33 +6474,25 @@ export default function Page() {
             takeLoginRoleIntent();
           }
           if (mode === "provider") {
-            void supabase.auth.updateUser({ data: { app_role: "provider" } });
+            void supabase.auth.updateUser({
+              data: { app_role: "provider" },
+            });
           }
-        });
-        void fetchAccountRoles({ accessToken: token })
-          .then((roles) => {
-            if (cancelled) return;
-            if (roles) {
-              setAccountRolesUi({
-                has_customer: roles.has_customer,
-                has_provider: roles.has_provider,
-                can_switch_modes: Boolean(roles.can_switch_modes),
-              });
-            }
-            setAccountRolesReady(true);
-          })
-          .catch(() => {
-            if (!cancelled) setAccountRolesReady(true);
-          });
-      } else {
-        setIsProviderOnline(false);
-        setAccountRolesUi({
-          has_customer: false,
-          has_provider: false,
-          can_switch_modes: false,
-        });
-        setAccountRolesReady(true);
-      }
+        }
+
+        if (roles) {
+          if (!cancelled) {
+            setAccountRolesUi({
+              has_customer: roles.has_customer,
+              has_provider: roles.has_provider,
+              can_switch_modes: Boolean(roles.can_switch_modes),
+            });
+          }
+          setAccountRolesReady(true);
+        } else if (!cancelled) {
+          setAccountRolesReady(true);
+        }
+      })();
     };
     const authReadyTimeout = window.setTimeout(() => {
       markAuthReady();
@@ -7063,11 +7124,13 @@ export default function Page() {
     setShowMenu(false);
     setShowProfile(false);
     setIsLoggedIn(false);
+    setNeedProviderLogin(false);
     setProviderStats(null);
     setProviderStatsLoading(false);
     if (typeof window !== "undefined") {
       clearOAuthPending();
       clearProviderSignupInProgress();
+      clearNeedProviderLogin();
       localStorage.removeItem(PROVIDER_SETUP_REDIRECT_KEY);
       localStorage.removeItem(SKILLS_SAVED_MAIN_REDIRECT_KEY);
       if (window.location.pathname !== "/") {
@@ -13623,10 +13686,25 @@ export default function Page() {
 
   // Show login page if not logged in, or mid phone-first provider signup
   // (OTP/OAuth already created a session before profile→payment→services).
-  if (!isLoggedIn || providerSignupGate) {
+  if (!isLoggedIn || providerSignupGate || needProviderLogin) {
     return (
       <LoginPage
         onProviderSignupGateChange={setProviderSignupGate}
+        needProviderPrompt={needProviderLogin}
+        onDismissNeedProvider={() => {
+          void handleLogout();
+          writeLoginRoleIntent("provider");
+        }}
+        onBecomeProviderFromLogin={() => {
+          clearNeedProviderLogin();
+          setNeedProviderLogin(false);
+          beginProviderSignupInProgress("profile");
+          setProviderSignupGate(true);
+        }}
+        onNeedProviderLogin={() => {
+          persistNeedProviderLogin();
+          setNeedProviderLogin(true);
+        }}
         onLogin={(userType) => {
           clearProviderSignupInProgress();
           setProviderSignupGate(false);

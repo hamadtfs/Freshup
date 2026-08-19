@@ -26,7 +26,8 @@ export async function completeOAuthSession(
     await supabase.auth.updateUser({
       data: { app_role: role },
     })
-    if (pending?.role) {
+    // Login-as-provider (customer screen, Provider toggle) must not claim a grant.
+    if (pending?.role && !pending.providerLoginOnly) {
       const { data: sessionData } = await supabase.auth.getSession()
       await claimSignupRole(pending.role, {
         accessToken: sessionData.session?.access_token,

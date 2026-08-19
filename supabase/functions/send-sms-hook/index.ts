@@ -10,7 +10,8 @@
  *   TWILIO_ACCOUNT_SID
  *   TWILIO_AUTH_TOKEN
  *   TWILIO_MESSAGING_SERVICE_SID  (preferred) and/or TWILIO_PHONE_NUMBER
- *   SMS_DEV_LOG_OTP=true          — local only; logs OTP, skips Twilio if creds missing
+ *   SMS_DEV_LOG_OTP=true          — logs OTP to function logs; still requires Twilio
+ *                                   (must never 200 without a Message SID)
  */
 import { Webhook } from "npm:standardwebhooks@1.0.0";
 
@@ -157,13 +158,8 @@ Deno.serve(async (req) => {
     console.log(`[send-sms-hook][DEV] OTP for ${maskPhone(phone)}: ${otp}`);
   }
 
-  const twilioSid = Deno.env.get("TWILIO_ACCOUNT_SID") ?? "";
-  const twilioToken = Deno.env.get("TWILIO_AUTH_TOKEN") ?? "";
-  if ((!twilioSid || !twilioToken) && logOtp) {
-    console.warn("[send-sms-hook] Twilio unset; DEV log path only");
-    return json(200, { ok: true, dev: true });
-  }
-
+  // Never 200 without a Twilio Message SID. Auth treats 200 as "SMS sent" and
+  // the app advances to the code screen even when nothing was delivered.
   const result = await sendTwilioSms(
     phone,
     `Your Fresh Up code is ${otp}`,

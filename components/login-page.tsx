@@ -45,6 +45,7 @@ import {
   writeLoginRoleIntent,
 } from "@/lib/auth/login-role-intent";
 import { fetchAccountRoles } from "@/lib/auth/fetch-account-roles";
+import { isProviderSignupIncomplete } from "@/lib/auth/resolve-account-roles";
 import { claimSignupRole } from "@/lib/auth/claim-signup-role";
 import {
   snapPriceKr,
@@ -75,6 +76,12 @@ interface LoginPageProps {
   onSkip?: (userType?: UserType) => void;
   /** Parent keeps LoginPage mounted while OTP/OAuth creates a session mid-signup. */
   onProviderSignupGateChange?: (active: boolean) => void;
+  /** Signed in as customer but chose Provider login — not registered as provider. */
+  needProviderPrompt?: boolean;
+  onDismissNeedProvider?: () => void;
+  onBecomeProviderFromLogin?: () => void;
+  /** Phone/OAuth login-as-provider with no provider grant. */
+  onNeedProviderLogin?: () => void;
   language?: Language;
   onLanguageChange?: (lang: Language) => void;
 }
@@ -1324,6 +1331,10 @@ export default function LoginPage({
   onLogin,
   onSkip,
   onProviderSignupGateChange,
+  needProviderPrompt = false,
+  onDismissNeedProvider,
+  onBecomeProviderFromLogin,
+  onNeedProviderLogin,
   language = "no",
   onLanguageChange,
 }: LoginPageProps) {
@@ -1396,6 +1407,53 @@ export default function LoginPage({
   const [locationStatus, setLocationStatus] = useState<
     "idle" | "pending" | "ready" | "denied"
   >("idle");
+
+  useEffect(() => {
+    if (!needProviderPrompt) return;
+    setView("customer");
+    setIsProviderMode(true);
+    writeLoginRoleIntent("provider");
+  }, [needProviderPrompt]);
+
+  const renderNeedProviderDialog = () => {
+    if (!needProviderPrompt) return null;
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/45 px-6">
+        <div className="w-full max-w-sm rounded-2xl bg-background p-6 shadow-xl">
+          <h2 className="text-lg font-semibold text-foreground mb-2">
+            {isEn ? "Not a provider yet" : "Ikke tilbyder ennå"}
+          </h2>
+          <p className="text-sm text-muted-foreground mb-6">
+            {isEn
+              ? "This account is not registered as a provider. Become a provider first to continue."
+              : "Denne kontoen er ikke registrert som tilbyder. Bli tilbyder først for å fortsette."}
+          </p>
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setView("provider");
+                setProviderAuthStep("profile");
+                setShowSummary(true);
+                setStep("auth");
+                onBecomeProviderFromLogin?.();
+              }}
+              className="w-full py-3 rounded-xl bg-foreground text-background font-medium"
+            >
+              {isEn ? "Become a provider" : "Bli tilbyder"}
+            </button>
+            <button
+              type="button"
+              onClick={() => onDismissNeedProvider?.()}
+              className="w-full py-3 rounded-xl border border-border font-medium"
+            >
+              {isEn ? "Cancel" : "Avbryt"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   // Resume phone-first provider signup after OAuth return (or remount).
   // Existing customer → skip verify-phone, same as mobile Become a provider.
@@ -1901,6 +1959,10 @@ export default function LoginPage({
             ? { providerOnboarding }
             : { providerSignupContinue: true }),
         });
+      } else if (role === "provider") {
+        // Customer login screen, Provider toggle — match mobile: no grant claim.
+        writeLoginRoleIntent("provider");
+        saveOAuthPending({ role: "provider", providerLoginOnly: true });
       } else {
         saveOAuthPending({ role });
       }
@@ -2089,16 +2151,40 @@ export default function LoginPage({
 
       const { data: sessionData } = await supabase.auth.getSession();
       const accessToken = sessionData?.session?.access_token as string | undefined;
-      await supabase.auth.updateUser({ data: { app_role: role } });
-      await claimSignupRole(role, { accessToken });
+      const isProviderLoginOnly =
+        role === "provider" && view === "customer" && isProviderMode;
 
-      // Customer login: enter the app. Do not send them into provider onboarding.
       if (role === "customer") {
+        await supabase.auth.updateUser({ data: { app_role: role } });
+        await claimSignupRole(role, { accessToken });
         onLogin("customer");
         return true;
       }
 
-      // Existing provider who finished skills → dashboard. Incomplete signup stays here.
+      if (isProviderLoginOnly) {
+        const roles = await Promise.race([
+          fetchAccountRoles({ intent: "provider", accessToken }),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
+        ]);
+        if (roles?.has_provider && roles.provider_has_skills) {
+          onLogin("provider");
+          return true;
+        }
+        if (isProviderSignupIncomplete(roles)) {
+          beginProviderSignupInProgress("profile");
+          setProviderSignupResumeStep("profile");
+          onProviderSignupGateChange?.(true);
+          setProviderAuthStep("profile");
+          return true;
+        }
+        onNeedProviderLogin?.();
+        return true;
+      }
+
+      await supabase.auth.updateUser({ data: { app_role: role } });
+      await claimSignupRole(role, { accessToken });
+
+      // Become-a-provider flow: existing finished provider → dashboard.
       try {
         const roles = await Promise.race([
           fetchAccountRoles({ intent: "provider", accessToken }),
@@ -2309,6 +2395,8 @@ export default function LoginPage({
   // ─── Customer Login ────────────────────────────────────────────────────────
   if (view === "customer") {
     return (
+      <>
+        {renderNeedProviderDialog()}
       <main className="h-[100dvh] w-full max-w-md mx-auto bg-background flex flex-col">
         <div className="flex items-center justify-between px-4 pt-14 pb-4">
           <button
@@ -2491,6 +2579,7 @@ export default function LoginPage({
           )}
         </div>
       </main>
+      </>
     );
   }
 
