@@ -6020,9 +6020,18 @@ export default function Page() {
     let cancelled = false;
     const loadCatalog = async () => {
       try {
-        const res = await fetch("/api/services/list?hierarchy=1", {
-          cache: "no-store",
-        });
+        const params = new URLSearchParams(
+          typeof window !== "undefined" ? window.location.search : "",
+        );
+        const includeProbe =
+          params.get("paymentProbe") === "1" || params.get("paymentProbe") === "true";
+
+        const res = await fetch(
+          `/api/services/list?hierarchy=1${
+            includeProbe ? "&include_probe=1" : ""
+          }`,
+          { cache: "no-store" },
+        );
         if (!res.ok) return;
         const json = await res.json();
         if (cancelled) return;

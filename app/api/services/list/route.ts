@@ -73,6 +73,12 @@ export async function GET(req: NextRequest) {
       const supabase = createAdminClient();
 
       const { searchParams } = new URL(req.url);
+      const includeProbe =
+        searchParams.get("include_probe") === "1" ||
+        searchParams.get("include_probe") === "true";
+      // Internal payment probe service used for live Stripe end-to-end testing.
+      // Hidden from normal catalog unless `include_probe=1`.
+      const PAYMENT_PROBE_SERVICE_ID = "classic_cut_m";
       const hierarchy = searchParams.get("hierarchy");
       const mode = searchParams.get("mode");
       const target = searchParams.get("target");
@@ -124,6 +130,13 @@ export async function GET(req: NextRequest) {
         if (categoriesErr) throw categoriesErr;
         if (servicesErr) throw servicesErr;
 
+        const filteredServices =
+          includeProbe || !services
+            ? services || []
+            : (services || []).filter(
+                (s) => String(s?.id || "") !== PAYMENT_PROBE_SERVICE_ID,
+              );
+
         const labelToName = <
           T extends { label?: string | null; name?: string | null },
         >(
@@ -149,7 +162,7 @@ export async function GET(req: NextRequest) {
           modes: remap(modes),
           targets: remap(targets),
           categories: remap(categories),
-          services: services || [],
+          services: filteredServices,
         });
       }
 
@@ -218,7 +231,13 @@ export async function GET(req: NextRequest) {
             return targetMatches && categoryMatches;
           });
 
-        const strictServices = keepCanonicalShape(services || []);
+        const candidateServices = includeProbe
+          ? services || []
+          : (services || []).filter(
+              (s) => String(s?.id || "") !== PAYMENT_PROBE_SERVICE_ID,
+            );
+
+        const strictServices = keepCanonicalShape(candidateServices);
         if (strictServices.length > 0) {
           return NextResponse.json({
             services: dedupeServices(strictServices),
