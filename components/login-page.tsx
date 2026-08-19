@@ -61,6 +61,9 @@ import {
   saveProviderSignupCoords,
   submitSignupBasePrices,
 } from "@/lib/pricing/submit-signup-base-prices";
+import {
+  captureAndSaveCustomerSignupLocationWeb,
+} from "@/lib/customer/save-signup-location-web";
 import { formatDisplayPrice, formatDeliveryRateLabel } from "@/lib/pricing/format-display-kr";
 import {
   stripeConnectStartUserMessage,
@@ -2157,6 +2160,10 @@ export default function LoginPage({
       if (role === "customer") {
         await supabase.auth.updateUser({ data: { app_role: role } });
         await claimSignupRole(role, { accessToken });
+        const uid = sessionData?.session?.user?.id;
+        if (uid) {
+          void captureAndSaveCustomerSignupLocationWeb(uid);
+        }
         onLogin("customer");
         return true;
       }

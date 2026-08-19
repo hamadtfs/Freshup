@@ -9,6 +9,9 @@ import { writeLoginRoleIntent } from "@/lib/auth/login-role-intent"
 import { setNeedProviderLogin } from "@/lib/auth/need-provider-login"
 import { isProviderSignupIncomplete } from "@/lib/auth/resolve-account-roles"
 import {
+  captureAndSaveCustomerSignupLocationWeb,
+} from "@/lib/customer/save-signup-location-web"
+import {
   beginProviderSignupInProgress,
   setProviderSignupResumeStep,
 } from "@/lib/auth/provider-signup-gate"
@@ -58,6 +61,9 @@ export default function AuthCallbackPage() {
       try {
         pending = consumeOAuthPending()
         await completeOAuthSession(supabase, userId, pending)
+        if (pending?.role === "customer") {
+          void captureAndSaveCustomerSignupLocationWeb(userId)
+        }
         // Become-a-provider phone-first signup — resume profile→… after OAuth.
         if (
           pending?.role === "provider" &&
