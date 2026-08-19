@@ -13,14 +13,24 @@ export async function ensureStripeCustomer(
     .eq("id", userId)
     .maybeSingle();
 
+  const stripe = getStripe();
   const stored = String(existing?.stripe_customer_id || "").trim();
-  if (stored) return stored;
+  if (stored) {
+    try {
+      const existingCustomer = await stripe.customers.retrieve(stored);
+      if (!("deleted" in existingCustomer && existingCustomer.deleted)) {
+        return stored;
+      }
+    } catch {
+      // Stored customer id is stale (e.g. switched test/live keys or account).
+      // Fall through and create a fresh Stripe customer for this user.
+    }
+  }
 
   const { data: authUser } = await supabase.auth.admin.getUserById(userId);
   const email = authUser?.user?.email ?? undefined;
   const phone = authUser?.user?.phone ?? undefined;
 
-  const stripe = getStripe();
   const customer = await stripe.customers.create({
     email: email || undefined,
     phone: phone || undefined,

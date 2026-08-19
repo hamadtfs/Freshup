@@ -23,9 +23,8 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     console.error("[payments/methods/setup-intent]", error);
-    return NextResponse.json(
-      { error: "SETUP_INTENT_FAILED" },
-      { status: 500 },
-    );
+    const message =
+      error instanceof Error ? error.message : "SETUP_INTENT_FAILED";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
