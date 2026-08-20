@@ -195,9 +195,68 @@ export async function confirmBookingPayment(
     return { ok: false, error: "PAYMENT_METHOD_NOT_FOUND", status: 404 };
   }
 
+  const stripeCustomerId = await ensureStripeCustomer(supabase, customerId);
+  if (!stripeCustomerId) {
+    return { ok: false, error: "STRIPE_NOT_CONFIGURED", status: 400 };
+  }
+
   const stripe = getStripe();
+
+  // Guard: PM must belong to this Stripe Customer (stale rows after key switch
+  // or customer recreate cause Stripe's "does not belong to the Customer" error).
+  try {
+    const pm = await stripe.paymentMethods.retrieve(pmId);
+    const pmCustomer =
+      typeof pm.customer === "string" ? pm.customer : pm.customer?.id || null;
+    if (pmCustomer && pmCustomer !== stripeCustomerId) {
+      await supabase
+        .from("payment_methods")
+        .delete()
+        .eq("customer_id", customerId)
+        .eq("provider_payment_method_id", pmId);
+      return {
+        ok: false,
+        error:
+          "This saved card is no longer valid. Remove it and add the card again.",
+        status: 409,
+      };
+    }
+    if (!pmCustomer) {
+      await stripe.paymentMethods.attach(pmId, { customer: stripeCustomerId });
+    }
+  } catch {
+    await supabase
+      .from("payment_methods")
+      .delete()
+      .eq("customer_id", customerId)
+      .eq("provider_payment_method_id", pmId);
+    return {
+      ok: false,
+      error:
+        "This saved card is no longer valid. Remove it and add the card again.",
+      status: 409,
+    };
+  }
+
   const intentId = lock.stripe_payment_intent_id;
   let pi = await stripe.paymentIntents.retrieve(intentId);
+  const piCustomerId =
+    typeof pi.customer === "string"
+      ? pi.customer
+      : pi.customer && typeof pi.customer === "object" && "id" in pi.customer
+        ? String((pi.customer as { id: string }).id)
+        : null;
+
+  // Keep PI customer in sync with the current Stripe customer.
+  if (
+    (piCustomerId !== stripeCustomerId || !piCustomerId) &&
+    (pi.status === "requires_payment_method" ||
+      pi.status === "requires_confirmation")
+  ) {
+    pi = await stripe.paymentIntents.update(intentId, {
+      customer: stripeCustomerId,
+    });
+  }
 
   if (AUTHORIZED_PI_STATUSES.has(pi.status)) {
     await supabase

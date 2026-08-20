@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import MapView from "@/components/map-view";
 import { cn } from "@/lib/utils";
+import { reverseGeocodeArea } from "@/lib/maps/reverse-geocode";
 interface ProfilePageProps {
   onBack: () => void;
   userMode: "customer" | "provider";
@@ -126,6 +127,11 @@ export default function ProfilePage({
   const [mapPickerResolving, setMapPickerResolving] = useState(false);
   const [mapPickerTarget, setMapPickerTarget] =
     useState<LocationTarget>("default");
+  const [mapPickerAreaLabel, setMapPickerAreaLabel] = useState("");
+  const reverseGeocodeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const reverseGeocodeSeqRef = useRef(0);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -499,7 +505,11 @@ export default function ProfilePage({
     }
   };
 
-  const saveDefaultLocation = async () => {
+  const saveDefaultLocation = async (override?: {
+    address?: string;
+    lat?: number | null;
+    lng?: number | null;
+  }) => {
     if (!userId) return;
 
     const endpoint =
@@ -507,12 +517,21 @@ export default function ProfilePage({
     const userIdHeader =
       userMode === "provider" ? "x-provider-id" : "x-user-id";
 
+    const nextLat =
+      override && "lat" in override ? override.lat ?? null : settingsLocation.lat;
+    const nextLng =
+      override && "lng" in override ? override.lng ?? null : settingsLocation.lng;
+    const nextAddress =
+      override && "address" in override
+        ? typedAddress(override.address || "")
+        : typedAddress(settingsLocation.address);
+
     try {
       const hasPin =
-        typeof settingsLocation.lat === "number" &&
-        Number.isFinite(settingsLocation.lat) &&
-        typeof settingsLocation.lng === "number" &&
-        Number.isFinite(settingsLocation.lng);
+        typeof nextLat === "number" &&
+        Number.isFinite(nextLat) &&
+        typeof nextLng === "number" &&
+        Number.isFinite(nextLng);
 
       const res = await fetch(endpoint, {
         method: "PUT",
@@ -521,9 +540,9 @@ export default function ProfilePage({
           [userIdHeader]: userId,
         },
         body: JSON.stringify({
-          defaultLat: settingsLocation.lat,
-          defaultLng: settingsLocation.lng,
-          defaultAddress: typedAddress(settingsLocation.address) || undefined,
+          defaultLat: nextLat,
+          defaultLng: nextLng,
+          defaultAddress: nextAddress || undefined,
         }),
       });
 
@@ -534,9 +553,9 @@ export default function ProfilePage({
           address:
             typeof savedDefault.address === "string"
               ? savedDefault.address
-              : settingsLocation.address,
-          lat: toFiniteNumber(savedDefault.lat) ?? settingsLocation.lat,
-          lng: toFiniteNumber(savedDefault.lng) ?? settingsLocation.lng,
+              : nextAddress || settingsLocation.address,
+          lat: toFiniteNumber(savedDefault.lat) ?? nextLat,
+          lng: toFiniteNumber(savedDefault.lng) ?? nextLng,
         };
         setSettingsLocation(nextSettingsLocation);
         localStorage.setItem(
@@ -578,9 +597,9 @@ export default function ProfilePage({
         localStorage.setItem(
           settingsLocationCacheKey(userId, userMode),
           JSON.stringify({
-            address: settingsLocation.address,
-            lat: settingsLocation.lat,
-            lng: settingsLocation.lng,
+            address: nextAddress || settingsLocation.address,
+            lat: nextLat,
+            lng: nextLng,
             savedAt: Date.now(),
           }),
         );
@@ -592,23 +611,34 @@ export default function ProfilePage({
     }
   };
 
-  const saveServiceLocation = async () => {
+  const saveServiceLocation = async (override?: {
+    address?: string;
+    lat?: number | null;
+    lng?: number | null;
+  }) => {
     if (!userId) return false;
     const endpoint =
       userMode === "provider" ? "/api/providers/me" : "/api/customers/me";
     const userIdHeader =
       userMode === "provider" ? "x-provider-id" : "x-user-id";
+    const nextLat =
+      override && "lat" in override ? override.lat ?? null : contact.lat;
+    const nextLng =
+      override && "lng" in override ? override.lng ?? null : contact.lng;
+    const typed =
+      override && "address" in override
+        ? typedAddress(override.address || "")
+        : typedAddress(contact.address);
     const hasPin =
-      typeof contact.lat === "number" &&
-      Number.isFinite(contact.lat) &&
-      typeof contact.lng === "number" &&
-      Number.isFinite(contact.lng);
+      typeof nextLat === "number" &&
+      Number.isFinite(nextLat) &&
+      typeof nextLng === "number" &&
+      Number.isFinite(nextLng);
     const payload: Record<string, unknown> = {};
-    const typed = typedAddress(contact.address);
     if (typed) payload.address = typed;
     if (hasPin) {
-      payload.lat = contact.lat;
-      payload.lng = contact.lng;
+      payload.lat = nextLat;
+      payload.lng = nextLng;
     }
     try {
       const res = await fetch(endpoint, {
@@ -624,9 +654,10 @@ export default function ProfilePage({
       const savedContact = body?.contact || {};
       setContact((prev) => ({
         ...prev,
-        address: typedAddress(savedContact.address) || prev.address,
-        lat: toFiniteNumber(savedContact.lat) ?? prev.lat,
-        lng: toFiniteNumber(savedContact.lng) ?? prev.lng,
+        address:
+          typedAddress(savedContact.address) || typed || prev.address,
+        lat: toFiniteNumber(savedContact.lat) ?? nextLat ?? prev.lat,
+        lng: toFiniteNumber(savedContact.lng) ?? nextLng ?? prev.lng,
       }));
 
       // Hard-refresh from DB to keep service location tile in sync.
@@ -842,10 +873,58 @@ export default function ProfilePage({
     }
   };
 
+  const applyPinWithReverseGeocode = async (
+    target: LocationTarget,
+    lat: number,
+    lng: number,
+    opts?: { immediate?: boolean },
+  ) => {
+    if (target === "service") {
+      setContact((prev) => ({ ...prev, lat, lng }));
+    } else {
+      setSettingsLocation((prev) => ({ ...prev, lat, lng }));
+    }
+
+    if (reverseGeocodeTimerRef.current) {
+      clearTimeout(reverseGeocodeTimerRef.current);
+      reverseGeocodeTimerRef.current = null;
+    }
+
+    const seq = ++reverseGeocodeSeqRef.current;
+    const run = async () => {
+      setMapPickerResolving(true);
+      try {
+        const result = await reverseGeocodeArea(lat, lng);
+        if (seq !== reverseGeocodeSeqRef.current) return;
+        const address = result?.address?.trim() || "";
+        setMapPickerAreaLabel(address);
+        if (!address) return;
+        if (target === "service") {
+          setContact((prev) => ({ ...prev, address }));
+        } else {
+          setSettingsLocation((prev) => ({ ...prev, address }));
+        }
+      } finally {
+        if (seq === reverseGeocodeSeqRef.current) {
+          setMapPickerResolving(false);
+        }
+      }
+    };
+
+    if (opts?.immediate) {
+      await run();
+      return;
+    }
+    reverseGeocodeTimerRef.current = setTimeout(() => {
+      void run();
+    }, 350);
+  };
+
   const openLocationPicker = async (target: LocationTarget = "default") => {
     setError(null);
     setMessage(null);
     setMapPickerTarget(target);
+    setMapPickerAreaLabel("");
     setShowLocationPicker(true);
     setMapPickerResolving(true);
 
@@ -862,19 +941,9 @@ export default function ProfilePage({
       if (!hasSavedPin) {
         const fromGps = await tryDeviceLocation();
         if (fromGps) {
-          if (target === "service") {
-            setContact((prev) => ({
-              ...prev,
-              lat: fromGps.lat,
-              lng: fromGps.lng,
-            }));
-          } else {
-            setSettingsLocation((prev) => ({
-              ...prev,
-              lat: fromGps.lat,
-              lng: fromGps.lng,
-            }));
-          }
+          await applyPinWithReverseGeocode(target, fromGps.lat, fromGps.lng, {
+            immediate: true,
+          });
           return;
         }
 
@@ -887,22 +956,24 @@ export default function ProfilePage({
         if (addressHint) {
           const geo = await geocodeFreeText(addressHint);
           if (geo) {
-            if (target === "service") {
-              setContact((prev) => ({
-                ...prev,
-                lat: geo.lat,
-                lng: geo.lng,
-              }));
-            } else {
-              setSettingsLocation((prev) => ({
-                ...prev,
-                lat: geo.lat,
-                lng: geo.lng,
-              }));
-            }
+            await applyPinWithReverseGeocode(target, geo.lat, geo.lng, {
+              immediate: true,
+            });
             return;
           }
         }
+      } else if (
+        typeof currentLocation.lat === "number" &&
+        typeof currentLocation.lng === "number"
+      ) {
+        // Refresh area label for the existing pin when opening the picker.
+        await applyPinWithReverseGeocode(
+          target,
+          currentLocation.lat,
+          currentLocation.lng,
+          { immediate: true },
+        );
+        return;
       }
     } finally {
       setMapPickerResolving(false);
@@ -1262,64 +1333,105 @@ export default function ProfilePage({
                     : null
                 }
                 onMapClick={(pt) => {
-                  if (mapPickerTarget === "service") {
-                    setContact((prev) => ({
-                      ...prev,
-                      lat: pt.lat,
-                      lng: pt.lng,
-                    }));
-                  } else {
-                    setSettingsLocation((prev) => ({
-                      ...prev,
-                      lat: pt.lat,
-                      lng: pt.lng,
-                    }));
-                  }
+                  void applyPinWithReverseGeocode(
+                    mapPickerTarget,
+                    pt.lat,
+                    pt.lng,
+                  );
                 }}
                 language={language}
               />
             </div>
-            <div className="flex items-center justify-between border-t border-gray-200 px-4 py-3">
-              <p className="text-xs text-gray-600">
-                {typeof (mapPickerTarget === "service"
-                  ? contact.lat
-                  : settingsLocation.lat) === "number" &&
-                typeof (mapPickerTarget === "service"
-                  ? contact.lng
-                  : settingsLocation.lng) === "number"
-                  ? `${t.selectedCoords}: ${
-                      mapPickerTarget === "service"
-                        ? (contact.lat as number).toFixed(5)
-                        : (settingsLocation.lat as number).toFixed(5)
-                    }, ${
-                      mapPickerTarget === "service"
-                        ? (contact.lng as number).toFixed(5)
-                        : (settingsLocation.lng as number).toFixed(5)
-                    }`
-                  : t.mapPickerHint}
-              </p>
+            <div className="flex items-center justify-between gap-3 border-t border-gray-200 px-4 py-3">
+              <div className="min-w-0 flex-1">
+                {(mapPickerAreaLabel ||
+                  typedAddress(
+                    mapPickerTarget === "service"
+                      ? contact.address
+                      : settingsLocation.address,
+                  )) && (
+                  <p className="truncate text-sm font-medium text-gray-900">
+                    {mapPickerAreaLabel ||
+                      typedAddress(
+                        mapPickerTarget === "service"
+                          ? contact.address
+                          : settingsLocation.address,
+                      )}
+                  </p>
+                )}
+                <p className="text-xs text-gray-600">
+                  {typeof (mapPickerTarget === "service"
+                    ? contact.lat
+                    : settingsLocation.lat) === "number" &&
+                  typeof (mapPickerTarget === "service"
+                    ? contact.lng
+                    : settingsLocation.lng) === "number"
+                    ? `${t.selectedCoords}: ${
+                        mapPickerTarget === "service"
+                          ? (contact.lat as number).toFixed(5)
+                          : (settingsLocation.lat as number).toFixed(5)
+                      }, ${
+                        mapPickerTarget === "service"
+                          ? (contact.lng as number).toFixed(5)
+                          : (settingsLocation.lng as number).toFixed(5)
+                      }`
+                    : t.mapPickerHint}
+                </p>
+              </div>
               <Button
                 type="button"
-                className="h-9 bg-gray-900 text-white hover:bg-gray-800"
+                className="h-9 shrink-0 bg-gray-900 text-white hover:bg-gray-800"
+                disabled={mapPickerResolving}
                 onClick={async () => {
+                  const lat =
+                    mapPickerTarget === "service"
+                      ? contact.lat
+                      : settingsLocation.lat;
+                  const lng =
+                    mapPickerTarget === "service"
+                      ? contact.lng
+                      : settingsLocation.lng;
+                  let address =
+                    mapPickerAreaLabel ||
+                    typedAddress(
+                      mapPickerTarget === "service"
+                        ? contact.address
+                        : settingsLocation.address,
+                    ) ||
+                    "";
+                  if (
+                    typeof lat === "number" &&
+                    typeof lng === "number" &&
+                    !address
+                  ) {
+                    const result = await reverseGeocodeArea(lat, lng);
+                    address = result?.address?.trim() || "";
+                    if (address) {
+                      setMapPickerAreaLabel(address);
+                      if (mapPickerTarget === "service") {
+                        setContact((prev) => ({ ...prev, address }));
+                      } else {
+                        setSettingsLocation((prev) => ({ ...prev, address }));
+                      }
+                    }
+                  }
                   setShowLocationPicker(false);
+                  const override = {
+                    address,
+                    lat,
+                    lng,
+                  };
                   const success =
                     mapPickerTarget === "service"
-                      ? await saveServiceLocation()
-                      : await saveDefaultLocation();
-                  // Ensure UI reflects what was just picked even before any async refetch settles.
-                  if (mapPickerTarget === "service") {
-                    setContact((prev) => ({ ...prev }));
-                  } else {
-                    setSettingsLocation((prev) => ({ ...prev }));
-                  }
+                      ? await saveServiceLocation(override)
+                      : await saveDefaultLocation(override);
                   if (success) {
                     setMessage(t.profileSaved);
                     setTimeout(() => setMessage(null), 3000);
                   }
                 }}
               >
-                {t.done}
+                {mapPickerResolving ? t.fetching : t.done}
               </Button>
             </div>
           </div>

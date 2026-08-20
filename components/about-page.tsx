@@ -55,53 +55,9 @@ export default function AboutPage({
 
       <div className="flex-1 overflow-y-auto px-4 pb-8 pt-6">
         <div className="flex flex-col items-center text-center mb-8">
-          <div className="mb-5">
-            <svg width="88" height="44" viewBox="0 0 100 50" aria-hidden>
-              <rect
-                x="2"
-                y="2"
-                width="96"
-                height="46"
-                rx="23"
-                fill="currentColor"
-                className="text-foreground"
-              />
-              <text
-                x="25"
-                y="33"
-                textAnchor="middle"
-                fill="currentColor"
-                className="text-background"
-                fontFamily="system-ui"
-                fontWeight="800"
-                fontSize="20"
-              >
-                F
-              </text>
-              <text
-                x="50"
-                y="33"
-                textAnchor="middle"
-                fill="currentColor"
-                className="text-background"
-                fontFamily="system-ui"
-                fontWeight="800"
-                fontSize="20"
-              >
-                U
-              </text>
-              <text
-                x="75"
-                y="33"
-                textAnchor="middle"
-                fill="currentColor"
-                className="text-background"
-                fontFamily="system-ui"
-                fontWeight="800"
-                fontSize="20"
-              >
-                P
-              </text>
+          <div className="mb-5" aria-hidden>
+            <svg width="72" height="72" viewBox="0 0 72 72">
+              <circle cx="36" cy="36" r="34.25" fill="#EAFE53" stroke="#161616" strokeWidth="3.5" />
             </svg>
           </div>
           <p className="text-lg font-bold text-foreground tracking-tight">
