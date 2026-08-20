@@ -11,12 +11,13 @@ export function bookingPaymentUserMessage(
     /no such paymentmethod|resource_missing.*payment.?method|payment_method_not_found|pm_[a-z0-9]+.*(invalid|not found|does not exist)/i.test(
       s,
     ) ||
+    /does not belong to the customer/i.test(s) ||
     (lower.includes("paymentmethod") &&
       (lower.includes("no such") || lower.includes("resource_missing")))
   ) {
     return isEn
-      ? "That card is no longer valid. Add a card under Payment and try again."
-      : "Kortet er ikke lenger gyldig. Legg til et kort under Betaling og prøv igjen.";
+      ? "That card is no longer valid. Remove it under Payment, add the card again, then retry."
+      : "Kortet er ikke lenger gyldig. Fjern det under Betaling, legg det til på nytt, og prøv igjen.";
   }
 
   if (/card_declined|your card was declined/.test(lower)) {

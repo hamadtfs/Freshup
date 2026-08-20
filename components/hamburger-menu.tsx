@@ -716,13 +716,6 @@ export default function HamburgerMenu({
                 </button>
               </div>
             </div>
-            {signedIn ? (
-              <p className="px-1 text-[11px] leading-4 text-muted-foreground">
-                {isEn
-                  ? "Switching role logs you out. Log in again as the other role."
-                  : "Bytte av rolle logger deg ut. Logg inn igjen som den andre rollen."}
-              </p>
-            ) : null}
             </div>
           ) : (
             <div className="space-y-2">

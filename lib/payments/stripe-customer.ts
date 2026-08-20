@@ -1,6 +1,19 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getStripe, isStripeConfigured } from "@/lib/payments/stripe";
 
+async function clearLocalPaymentMethods(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<void> {
+  await supabase.from("payment_methods").delete().eq("customer_id", userId);
+}
+
+/**
+ * Ensure this Fresh Up user has a valid Stripe Customer for the *current*
+ * STRIPE_SECRET_KEY. If the stored id is missing/deleted/from another
+ * Stripe account (test↔live switch), create a new customer and drop stale
+ * local payment_methods rows so we never charge a PM against the wrong cus_.
+ */
 export async function ensureStripeCustomer(
   supabase: SupabaseClient,
   userId: string,
@@ -22,10 +35,14 @@ export async function ensureStripeCustomer(
         return stored;
       }
     } catch {
-      // Stored customer id is stale (e.g. switched test/live keys or account).
+      // Stored customer id is stale (switched test/live keys or account).
       // Fall through and create a fresh Stripe customer for this user.
     }
   }
+
+  // Recreating the Stripe customer — old PaymentMethods belong to the previous
+  // cus_ and will fail with "does not belong to the Customer you supplied".
+  await clearLocalPaymentMethods(supabase, userId);
 
   const { data: authUser } = await supabase.auth.admin.getUserById(userId);
   const email = authUser?.user?.email ?? undefined;
