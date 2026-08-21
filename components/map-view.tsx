@@ -25,6 +25,7 @@ import {
   updateLiveFleetMarkerHeading,
   type LiveFleetMarkerVariant,
 } from "@/lib/maps/live-fleet-marker";
+import LoadingState from "@/components/ui/loading-state";
 
 type LatLng = { lat: number; lng: number };
 
@@ -996,8 +997,12 @@ export default function MapView({
     >
       {marketCalculating && marketActivityLabel ? (
         <div className="pointer-events-none absolute bottom-36 left-1/2 z-[5] -translate-x-1/2">
-          <div className="freshup-market-calculating__label">
-            {marketActivityLabel}
+          <div className="rounded-full bg-white/90 px-3 py-1.5 shadow-sm backdrop-blur-sm">
+            <LoadingState
+              label={String(marketActivityLabel).replace(/…$/, "")}
+              variant="Drive"
+              size="sm"
+            />
           </div>
         </div>
       ) : null}

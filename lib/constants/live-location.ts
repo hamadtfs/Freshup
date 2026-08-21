@@ -1,8 +1,15 @@
-/** Provider/customer GPS publish interval during active jobs (client: 5–10 s). */
-export const LIVE_LOCATION_PUBLISH_MS = 8_000;
+/** Active-delivery GPS watch: ask the OS for frequent fixes (Uber-like). */
+export const LIVE_LOCATION_WATCH_TIME_MS = 1_500;
+export const LIVE_LOCATION_WATCH_DISTANCE_M = 8;
 
-/** Ignore GPS updates when moved less than this (meters). */
-export const LIVE_LOCATION_MIN_MOVE_M = 25;
+/**
+ * Minimum gap between network publishes while watching.
+ * Local markers still update on every watch fix.
+ */
+export const LIVE_LOCATION_PUBLISH_MS = 3_000;
+
+/** Ignore network publishes when moved less than this (meters). */
+export const LIVE_LOCATION_MIN_MOVE_M = 12;
 
 /** DB `orders.status` values where provider live GPS is shared with the customer. */
 export const PROVIDER_LIVE_LOCATION_DB_STATUSES = [

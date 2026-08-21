@@ -13,6 +13,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
+import LoadingState from "@/components/ui/loading-state";
 import { cn } from "@/lib/utils";
 import {
   clearStoredDashboardMode,
@@ -125,6 +126,7 @@ import {
   resolveServicePriceFromOrderTotal,
 } from "@/lib/pricing/home-order-total";
 import { DEFAULT_SEARCH_DELIVERY_KM } from "@/lib/pricing/interim-delivery-km";
+import { isPaymentProbeService } from "@/lib/pricing/payment-probe";
 import {
   formatCustomerJobTitleFromUi,
   formatDbOrderStatusLabel,
@@ -177,19 +179,6 @@ const MapView = dynamic(() => import("@/components/map-view"), { ssr: false });
 type LatLng = { lat: number; lng: number };
 const OSLO_DEFAULT: LatLng = { lat: 59.9139, lng: 10.7522 };
 // const OSLO_DEFAULT: LatLng = { lat: 31.5204, lng: 74.3587 };
-
-/** Prefer live GPS when saved profile location is far away (common in two-browser local testing). */
-function pickMarketDetectionCoords(
-  saved: LatLng | null,
-  live: LatLng | null,
-  maxKm = 10,
-): LatLng | null {
-  if (saved && live) {
-    if (haversineKm(saved, live) > maxKm) return live;
-    return saved;
-  }
-  return saved ?? live ?? null;
-}
 
 function isSameLatLng(
   a: LatLng | null | undefined,
@@ -9338,9 +9327,12 @@ export default function Page() {
 
       if (!topDemandChip) {
         return (
-          <div className={cn("flex items-center gap-1", className)}>
-            <div className="w-1.5 h-1.5 bg-gray-300 rounded-full shrink-0" />
-            <span className="text-gray-500">{loadingLabel}</span>
+          <div className={cn("flex items-center gap-1 min-w-0", className)}>
+            <LoadingState
+              label={loadingLabel.replace(/…$/, "")}
+              variant={userMode === "provider" ? "Orbit" : "Dots"}
+              size="sm"
+            />
           </div>
         );
       }
@@ -9429,17 +9421,23 @@ export default function Page() {
 
   const [customerSavedLocation, setCustomerSavedLocation] =
     useState<LatLng | null>(null);
-  /** Avoid bulk-pricing on live GPS then jumping when saved profile location loads. */
+  /**
+   * True after the startup fresh-GPS attempt finishes.
+   * Saved / localStorage coords are visual only until then — never quote on them alone.
+   */
   const [customerPricingLocReady, setCustomerPricingLocReady] = useState(false);
-  /** After GPS button: use live device coords instead of saved profile pin. */
+  /** After GPS button (or auto far-from-saved): use live device coords for the map pin. */
   const [preferLiveGps, setPreferLiveGps] = useState(false);
   const [locatingGps, setLocatingGps] = useState(false);
   /** Bumps MapView viewportResetKey so pan-lock clears and map flies to GPS. */
   const [gpsRecenterNonce, setGpsRecenterNonce] = useState(0);
+  const [freshGpsCoords, setFreshGpsCoords] = useState<LatLng | null>(null);
 
   useEffect(() => {
     if (userMode !== "customer" || !loggedInUser?.id) {
       setCustomerSavedLocation(null);
+      setFreshGpsCoords(null);
+      setPreferLiveGps(false);
       setCustomerPricingLocReady(true);
       return;
     }
@@ -9447,10 +9445,12 @@ export default function Page() {
     const cached = readSavedProfileLocation(uid, "customer");
     if (cached) {
       setCustomerSavedLocation(cached);
-      setCustomerPricingLocReady(true);
     } else {
-      setCustomerPricingLocReady(false);
+      setCustomerSavedLocation(null);
     }
+    setPreferLiveGps(false);
+    setFreshGpsCoords(null);
+    setCustomerPricingLocReady(false);
 
     let cancelled = false;
     const loadFromApi = async () => {
@@ -9495,23 +9495,41 @@ export default function Page() {
         }
       } catch {
         // keep cached value if API fails
-      } finally {
-        if (!cancelled) setCustomerPricingLocReady(true);
       }
     };
-    void loadFromApi();
+
+    const resolveFreshGps = async () => {
+      try {
+        const pos = await getGeoloc();
+        if (cancelled || !pos) return;
+        setFreshGpsCoords(pos);
+        const saved = readSavedProfileLocation(uid, "customer") ?? cached;
+        const farFromSaved =
+          !saved || haversineKm(saved, pos) > 2;
+        if (farFromSaved || !saved) {
+          setPreferLiveGps(true);
+          setGpsRecenterNonce((n) => n + 1);
+        }
+      } catch {
+        // fall back to saved for pricing after ready
+      }
+    };
+
+    void (async () => {
+      await Promise.all([loadFromApi(), resolveFreshGps()]);
+      if (!cancelled) setCustomerPricingLocReady(true);
+    })();
 
     const onProfileUpdated = () => {
       const updated = readSavedProfileLocation(uid, "customer");
       if (updated) setCustomerSavedLocation(updated);
-      setCustomerPricingLocReady(true);
     };
     window.addEventListener("profileUpdated", onProfileUpdated);
     return () => {
       cancelled = true;
       window.removeEventListener("profileUpdated", onProfileUpdated);
     };
-  }, [userMode, loggedInUser?.id]);
+  }, [userMode, loggedInUser?.id, getGeoloc]);
 
   const customerLoc = useMemo((): LatLng | null => {
     if (
@@ -9536,16 +9554,17 @@ export default function Page() {
     geoloc?.lng,
   ]);
 
-  /** Location used for catalog pricing — waits for profile settle to avoid flash. */
+  /** Location used for catalog pricing — fresh GPS is source of truth. */
   const pricingCustomerLoc = useMemo((): LatLng | null => {
     if (userMode === "customer") {
       if (!customerPricingLocReady && !preferLiveGps) return null;
       const live =
-        typeof geoloc?.lat === "number" && typeof geoloc?.lng === "number"
+        freshGpsCoords ??
+        (typeof geoloc?.lat === "number" && typeof geoloc?.lng === "number"
           ? geoloc
-          : null;
-      if (preferLiveGps && live) return live;
-      return pickMarketDetectionCoords(customerSavedLocation, live);
+          : null);
+      if (live) return live;
+      return customerSavedLocation;
     }
     if (typeof geoloc?.lat === "number" && typeof geoloc?.lng === "number") {
       return geoloc;
@@ -9556,11 +9575,25 @@ export default function Page() {
     customerPricingLocReady,
     preferLiveGps,
     customerSavedLocation,
+    freshGpsCoords,
     geoloc?.lat,
     geoloc?.lng,
   ]);
 
   const [followMe, setFollowMe] = useState(true);
+
+  useEffect(() => {
+    if (userMode !== "customer") return;
+    if (
+      typeof geoloc?.lat === "number" &&
+      typeof geoloc?.lng === "number" &&
+      Number.isFinite(geoloc.lat) &&
+      Number.isFinite(geoloc.lng)
+    ) {
+      setFreshGpsCoords(geoloc);
+    }
+  }, [userMode, geoloc?.lat, geoloc?.lng]);
+
   useEffect(() => {
     if (userMode === "customer" && customerSavedLocation && !preferLiveGps) {
       stopWatch();
@@ -9583,17 +9616,21 @@ export default function Page() {
     try {
       const pos = await getGeoloc();
       if (pos) {
+        setFreshGpsCoords(pos);
         setPreferLiveGps(true);
+        setCustomerPricingLocReady(true);
         startWatch();
         // Clear manual pan-lock and force MapView to ease/fit to the new center.
         setGpsRecenterNonce((n) => n + 1);
       } else if (userMode === "customer" && customerSavedLocation) {
         setPreferLiveGps(false);
+        setCustomerPricingLocReady(true);
       }
     } catch {
       if (userMode === "customer" && customerSavedLocation) {
         setPreferLiveGps(false);
       }
+      setCustomerPricingLocReady(true);
     } finally {
       setLocatingGps(false);
     }
@@ -10371,7 +10408,11 @@ export default function Page() {
   const providerPosRef = useRef<LatLng | null>(null);
   const lastProviderPostPosRef = useRef<LatLng | null>(null);
   const lastCustomerPostPosRef = useRef<LatLng | null>(null);
+  const lastCustomerWatchPublishAtRef = useRef(0);
+  const lastProviderWatchPublishAtRef = useRef(0);
   const customerLivePosRef = useRef<LatLng | null>(null);
+  const liveRouteThrottleKeyRef = useRef<string | null>(null);
+  const providerPublishGeolocRef = useRef<LatLng | null>(null);
   const providerOrderDeliveryPinRef = useRef<LatLng | null>(null);
   const providerOrderProviderPinRef = useRef<LatLng | null>(null);
   const providerMatchDistanceKmRef = useRef<number | null>(null);
@@ -10811,12 +10852,21 @@ export default function Page() {
   const applyLiveProviderLocation = useCallback(
     (pos: LatLng) => {
       setProviderPosIfChanged(pos);
-      if (mode === "home") {
-        return;
-      }
-      const destination = geoloc || OSLO_DEFAULT;
-      void applyDrivingRoute(pos, destination);
+      const homeDest =
+        providerOrderDeliveryPinRef.current ??
+        customerLivePosRef.current ??
+        null;
+      const destination =
+        mode === "home" ? homeDest : geoloc || OSLO_DEFAULT;
+      if (!destination) return;
+
       setEta(kmToEtaMinutes(haversineKm(pos, destination)));
+
+      // Throttle Mapbox redraws (~110m) — marker/ETA still update every fix.
+      const routeKey = `${pos.lat.toFixed(3)},${pos.lng.toFixed(3)}->${destination.lat.toFixed(3)},${destination.lng.toFixed(3)}`;
+      if (liveRouteThrottleKeyRef.current === routeKey) return;
+      liveRouteThrottleKeyRef.current = routeKey;
+      void applyDrivingRoute(pos, destination);
     },
     [geoloc, mode, setProviderPosIfChanged, applyDrivingRoute],
   );
@@ -10830,13 +10880,13 @@ export default function Page() {
     ) => {
       if (!activeOrderId || !activeProviderId) return;
       if (inactiveLocationOrderIdsRef.current.has(activeOrderId)) return;
-      if (
-        !movedAtLeastMeters(
-          lastProviderPostPosRef.current,
-          pos,
-          LIVE_LOCATION_MIN_MOVE_M,
-        )
-      ) {
+      const dueByTime =
+        Date.now() - lastProviderWatchPublishAtRef.current >=
+        LIVE_LOCATION_PUBLISH_MS;
+      const minMove = dueByTime
+        ? LIVE_LOCATION_MIN_MOVE_M / 2
+        : LIVE_LOCATION_MIN_MOVE_M;
+      if (!movedAtLeastMeters(lastProviderPostPosRef.current, pos, minMove)) {
         return;
       }
       try {
@@ -10859,6 +10909,7 @@ export default function Page() {
           }
         } else if (res.ok) {
           lastProviderPostPosRef.current = pos;
+          lastProviderWatchPublishAtRef.current = Date.now();
         }
       } catch (err) {
         console.warn("[provider-location]", err);
@@ -10876,13 +10927,13 @@ export default function Page() {
     ) => {
       if (!activeOrderId || !activeCustomerId) return;
       if (inactiveLocationOrderIdsRef.current.has(activeOrderId)) return;
-      if (
-        !movedAtLeastMeters(
-          lastCustomerPostPosRef.current,
-          pos,
-          LIVE_LOCATION_MIN_MOVE_M,
-        )
-      ) {
+      const dueByTime =
+        Date.now() - lastCustomerWatchPublishAtRef.current >=
+        LIVE_LOCATION_PUBLISH_MS;
+      const minMove = dueByTime
+        ? LIVE_LOCATION_MIN_MOVE_M / 2
+        : LIVE_LOCATION_MIN_MOVE_M;
+      if (!movedAtLeastMeters(lastCustomerPostPosRef.current, pos, minMove)) {
         return;
       }
       try {
@@ -10902,6 +10953,7 @@ export default function Page() {
           inactiveLocationOrderIdsRef.current.add(activeOrderId);
         } else if (res.ok) {
           lastCustomerPostPosRef.current = pos;
+          lastCustomerWatchPublishAtRef.current = Date.now();
         }
       } catch (err) {
         if (process.env.NODE_ENV === "development") {
@@ -11248,6 +11300,13 @@ export default function Page() {
       mode === "home" &&
       (typeof lat !== "number" || typeof lng !== "number")
     ) {
+      setPriceLockLoading(false);
+      setPriceLockPhase("idle");
+      setMatchError(
+        language === "en"
+          ? "Location is required for Delivery. Allow GPS or set a default address in Profile."
+          : "Lokasjon kreves for Delivery. Tillat GPS eller sett standardadresse i Profil.",
+      );
       return;
     }
 
@@ -11257,14 +11316,11 @@ export default function Page() {
     const lockAttemptKey = [
       pricingServiceId,
       mode,
-      lat ?? "",
-      lng ?? "",
+      typeof lat === "number" ? lat.toFixed(4) : "",
+      typeof lng === "number" ? lng.toFixed(4) : "",
       [...selectedAddons].sort().join(","),
     ].join("|");
-    if (
-      confirmPriceLockAttemptedRef.current === lockAttemptKey &&
-      priceLockId
-    ) {
+    if (confirmPriceLockAttemptedRef.current === lockAttemptKey) {
       return;
     }
 
@@ -11272,6 +11328,7 @@ export default function Page() {
     const lockOnConfirm = async () => {
       setPriceLockLoading(true);
       setPriceLockPhase("calculating");
+      setMatchError(null);
       beginMarketCalculating();
       await new Promise((resolve) => setTimeout(resolve, 500));
       if (cancelled) {
@@ -11287,6 +11344,14 @@ export default function Page() {
         setPriceLockLoading(false);
         setPriceLockPhase("idle");
         endMarketCalculating();
+        if (!cancelled) {
+          confirmPriceLockAttemptedRef.current = lockAttemptKey;
+          setMatchError(
+            language === "en"
+              ? "Please log in again to lock the price."
+              : "Logg inn på nytt for å låse prisen.",
+          );
+        }
         return;
       }
 
@@ -11308,13 +11373,45 @@ export default function Page() {
           }),
         });
         if (cancelled) return;
-        const lockData = await lockRes.json();
+        const lockData = await lockRes.json().catch(() => null);
         if (!lockRes.ok) {
+          confirmPriceLockAttemptedRef.current = lockAttemptKey;
+          const apiError = String(lockData?.error || "").trim();
+          const apiMessage = String(lockData?.message || "").trim();
+          const fallback =
+            language === "en"
+              ? "Could not lock the price. Try again."
+              : "Kunne ikke låse prisen. Prøv igjen.";
+          if (apiError === "MARKET_CLOSED") {
+            setMatchError(
+              language === "en"
+                ? "No providers available nearby for this mode. Try At provider or Delivery, or wait for a provider to come online."
+                : "Ingen tilbydere i nærheten for denne modusen. Prøv Hos tilbyder eller Delivery, eller vent til en tilbyder er online.",
+            );
+          } else if (apiError === "Unauthorized" || lockRes.status === 401) {
+            setMatchError(
+              language === "en"
+                ? "Please log in again to lock the price."
+                : "Logg inn på nytt for å låse prisen.",
+            );
+          } else {
+            setMatchError(apiMessage || apiError || fallback);
+          }
           return;
         }
         const lockId =
           typeof lockData?.lock_id === "string" ? lockData.lock_id.trim() : "";
-        if (cancelled || !lockId) return;
+        if (cancelled || !lockId) {
+          if (!cancelled) {
+            confirmPriceLockAttemptedRef.current = lockAttemptKey;
+            setMatchError(
+              language === "en"
+                ? "Could not lock the price. Try again."
+                : "Kunne ikke låse prisen. Prøv igjen.",
+            );
+          }
+          return;
+        }
         lockSucceeded = true;
         confirmPriceLockAttemptedRef.current = lockAttemptKey;
         setPriceLockId(lockId);
@@ -11355,7 +11452,14 @@ export default function Page() {
           await new Promise((resolve) => setTimeout(resolve, 400));
         }
       } catch {
-        // quote fallback remains for display; book requires priceLockId
+        if (!cancelled) {
+          confirmPriceLockAttemptedRef.current = lockAttemptKey;
+          setMatchError(
+            language === "en"
+              ? "Could not lock the price. Check your connection and try again."
+              : "Kunne ikke låse prisen. Sjekk tilkoblingen og prøv igjen.",
+          );
+        }
       } finally {
         if (!cancelled) {
           setPriceLockLoading(false);
@@ -11370,13 +11474,13 @@ export default function Page() {
     void lockOnConfirm();
     return () => {
       cancelled = true;
+      setPriceLockLoading(false);
       endMarketCalculating();
       setPriceLockPhase("idle");
     };
   }, [
     userMode,
     step,
-    priceLockId,
     selectedStyle,
     selectedAddons,
     mode,
@@ -11387,6 +11491,7 @@ export default function Page() {
     supabase,
     beginMarketCalculating,
     endMarketCalculating,
+    language,
   ]);
 
   // Search timer effect
@@ -11480,9 +11585,13 @@ export default function Page() {
 
       if (!priceLockId) {
         throw new Error(
-          language === "en"
-            ? "Price is still being calculated. Please wait a moment."
-            : "Prisen beregnes fortsatt. Vent et oyeblikk.",
+          priceLockLoading
+            ? language === "en"
+              ? "Price is still being calculated. Please wait a moment."
+              : "Prisen beregnes fortsatt. Vent et oyeblikk."
+            : language === "en"
+              ? "Price lock failed. Close confirm and try again."
+              : "Prislås mislyktes. Lukk bekreftelsen og prøv igjen.",
         );
       }
 
@@ -11797,11 +11906,19 @@ export default function Page() {
   const handleConfirmBooking = async () => {
     if (!selectedStyle) return;
     if (!priceLockId) {
-      setMatchError(
-        language === "en"
-          ? "Price is still being calculated. Please wait a moment."
-          : "Prisen beregnes fortsatt. Vent et oyeblikk.",
-      );
+      if (priceLockLoading) {
+        setMatchError(
+          language === "en"
+            ? "Price is still being calculated. Please wait a moment."
+            : "Prisen beregnes fortsatt. Vent et oyeblikk.",
+        );
+      } else {
+        setMatchError(
+          language === "en"
+            ? "Price lock failed. Close confirm and try again."
+            : "Prislås mislyktes. Lukk bekreftelsen og prøv igjen.",
+        );
+      }
       return;
     }
 
@@ -12383,12 +12500,13 @@ export default function Page() {
     applyLiveProviderLocation,
   ]);
 
-  // Fallback position for the publish loop, read through a ref so a moving GPS
-  // watch does not tear down and restart the interval on every fix.
+  // Fallback position for the publish watch, read through a ref so a moving GPS
+  // watch does not tear down and restart on every fix.
   const customerPublishFallbackRef = useRef<LatLng | null>(null);
   customerPublishFallbackRef.current = geoloc ?? customerSavedLocation;
+  providerPublishGeolocRef.current = geoloc;
 
-  // Customer-side: publish live customer GPS for the active order.
+  // Customer-side: continuous watchPosition while Delivery is active.
   useEffect(() => {
     if (userMode !== "customer") return;
     if (!["matched", "in_service"].includes(step)) return;
@@ -12397,54 +12515,37 @@ export default function Page() {
     const activeCustomerId = String(loggedInUser?.id || "");
     if (!activeOrderId || !activeCustomerId) return;
     if (inactiveLocationOrderIdsRef.current.has(activeOrderId)) return;
+    if (!("geolocation" in navigator)) return;
 
     let cancelled = false;
-    const send = () => {
-      if (cancelled) return;
-      if ("geolocation" in navigator) {
-        navigator.geolocation.getCurrentPosition(
-          (position) => {
-            if (cancelled) return;
-            const pos = {
-              lat: position.coords.latitude,
-              lng: position.coords.longitude,
-            };
-            setCustomerLivePosIfChanged(pos);
-            void postCustomerLocation(
-              activeOrderId,
-              activeCustomerId,
-              pos,
-              position.coords.accuracy,
-            );
-          },
-          () => {
-            const fallback = customerPublishFallbackRef.current;
-            if (fallback) {
-              setCustomerLivePosIfChanged(fallback);
-              void postCustomerLocation(
-                activeOrderId,
-                activeCustomerId,
-                fallback,
-              );
-            }
-          },
-          { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 },
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        if (cancelled) return;
+        const pos = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        };
+        // Local marker updates on every fix; post* throttles the network write.
+        setCustomerLivePosIfChanged(pos);
+        void postCustomerLocation(
+          activeOrderId,
+          activeCustomerId,
+          pos,
+          position.coords.accuracy,
         );
-      } else {
+      },
+      () => {
         const fallback = customerPublishFallbackRef.current;
-        if (fallback) {
-          setCustomerLivePosIfChanged(fallback);
-          void postCustomerLocation(activeOrderId, activeCustomerId, fallback);
-        }
-      }
-    };
-
-    send();
-    const intervalId = window.setInterval(send, LIVE_LOCATION_PUBLISH_MS);
+        if (!fallback || cancelled) return;
+        setCustomerLivePosIfChanged(fallback);
+        void postCustomerLocation(activeOrderId, activeCustomerId, fallback);
+      },
+      { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 },
+    );
 
     return () => {
       cancelled = true;
-      window.clearInterval(intervalId);
+      navigator.geolocation.clearWatch(watchId);
     };
   }, [
     userMode,
@@ -12535,68 +12636,52 @@ export default function Page() {
     setCustomerLivePosIfChanged,
   ]);
 
-  // Provider-side: publish GPS during en_route and in_progress only.
+  // Provider-side: continuous watchPosition during en_route / in_progress.
   useEffect(() => {
     if (userMode !== "provider") return;
     if (!providerJobStepPublishesLiveLocation(providerJobStep)) return;
     const activeOrderId = String(mockIncomingRequest?.orderId || "");
     const activeProviderId = String(loggedInUser?.id || "");
     if (!activeOrderId || !activeProviderId) return;
+    if (!("geolocation" in navigator)) return;
 
     let cancelled = false;
-    const send = () => {
-      if (cancelled) return;
-      if ("geolocation" in navigator) {
-        navigator.geolocation.getCurrentPosition(
-          (position) => {
-            if (cancelled) return;
-            const pos = {
-              lat: position.coords.latitude,
-              lng: position.coords.longitude,
-            };
-            setProviderPosIfChanged(pos);
-            void postProviderLocation(
-              activeOrderId,
-              activeProviderId,
-              pos,
-              position.coords.accuracy,
-            );
-          },
-          () => {
-            if (geoloc) {
-              setProviderPosIfChanged(geoloc);
-              void postProviderLocation(
-                activeOrderId,
-                activeProviderId,
-                geoloc,
-              );
-            }
-          },
-          { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 },
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        if (cancelled) return;
+        const pos = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        };
+        // Marker + ETA every fix; post* throttles network writes.
+        applyLiveProviderLocation(pos);
+        void postProviderLocation(
+          activeOrderId,
+          activeProviderId,
+          pos,
+          position.coords.accuracy,
         );
-      } else if (geoloc) {
-        setProviderPosIfChanged(geoloc);
-        void postProviderLocation(activeOrderId, activeProviderId, geoloc);
-      }
-    };
-
-    send();
-    const intervalId = window.setInterval(send, LIVE_LOCATION_PUBLISH_MS);
+      },
+      () => {
+        const fallback = providerPublishGeolocRef.current;
+        if (!fallback || cancelled) return;
+        applyLiveProviderLocation(fallback);
+        void postProviderLocation(activeOrderId, activeProviderId, fallback);
+      },
+      { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 },
+    );
 
     return () => {
       cancelled = true;
-      window.clearInterval(intervalId);
+      navigator.geolocation.clearWatch(watchId);
     };
   }, [
     userMode,
     providerJobStep,
     mockIncomingRequest?.orderId,
-    incomingCustomerLat,
-    incomingCustomerLng,
     loggedInUser?.id,
-    geoloc,
     postProviderLocation,
-    setProviderPosIfChanged,
+    applyLiveProviderLocation,
   ]);
 
   // Provider home delivery: load booked customer coords from server (same source as dispatch).
@@ -14067,6 +14152,9 @@ export default function Page() {
     mockIncomingRequest?.matchDistanceKm ?? null,
   );
   const providerCustomerTarget =
+    (providerJobStep === "enroute" || providerJobStep === "in_service"
+      ? customerLivePos
+      : null) ??
     providerOrderDeliveryPin ??
     mockIncomingRequest?.customerLocation ??
     (incomingCustomerLat != null && incomingCustomerLng != null
@@ -16653,27 +16741,39 @@ export default function Page() {
                                       ))}
                                     </div>
                                     <div className="flex items-center gap-2 text-xs text-gray-600 mt-1">
-                                      <span
-                                        className={cn(
-                                          "flex items-center gap-1",
-                                          statusTier
-                                            ? tierTextClass(statusTier)
-                                            : "text-gray-500",
-                                        )}
-                                      >
-                                        <div
+                                      {statusTier ? (
+                                        <span
                                           className={cn(
-                                            "w-1.5 h-1.5 rounded-full",
-                                            statusTier
-                                              ? demandTierDotClass(statusTier)
-                                              : "bg-gray-300",
-                                            userMode === "provider" &&
-                                              statusTier === "green" &&
-                                              "animate-pulse",
+                                            "flex items-center gap-1",
+                                            tierTextClass(statusTier),
                                           )}
+                                        >
+                                          <div
+                                            className={cn(
+                                              "w-1.5 h-1.5 rounded-full",
+                                              demandTierDotClass(statusTier),
+                                              userMode === "provider" &&
+                                                statusTier === "green" &&
+                                                "animate-pulse",
+                                            )}
+                                          />
+                                          {displayAvailability}
+                                        </span>
+                                      ) : (
+                                        <LoadingState
+                                          label={
+                                            userMode === "provider"
+                                              ? language === "en"
+                                                ? "Loading demand"
+                                                : "Laster etterspørsel"
+                                              : language === "en"
+                                                ? "Finding availability"
+                                                : "Finner tilgjengelighet"
+                                          }
+                                          variant="Orbit"
+                                          size="sm"
                                         />
-                                        {displayAvailability}
-                                      </span>
+                                      )}
                                     </div>
                                   </div>
                                 </div>
@@ -16733,31 +16833,40 @@ export default function Page() {
                                     )
                                   ) : (
                                     /* Price stays visible even when no providers are nearby. */
-                                    <div className="flex items-center gap-1.5">
-                                      {customerDemandTier ? (
-                                        <span
-                                          className={cn(
-                                            "text-sm font-semibold leading-none",
-                                            tierTextClass(customerDemandTier),
-                                          )}
-                                          aria-hidden
-                                        >
-                                          {tierPriceArrow(customerDemandTier)}
-                                        </span>
-                                      ) : null}
-                                      <div
-                                        className={cn(
-                                          "font-bold text-base tabular-nums min-w-[3.5rem] text-right",
-                                          customerBulkPricesLoading
-                                            ? "text-gray-400"
-                                            : "text-gray-900",
+                                      <div className="flex items-center gap-1.5 min-w-[3.5rem] justify-end">
+                                        {customerBulkPricesLoading ? (
+                                          <LoadingState
+                                            label={
+                                              language === "en"
+                                                ? "Loading price"
+                                                : "Laster pris"
+                                            }
+                                            variant="Dots"
+                                            size="sm"
+                                          />
+                                        ) : (
+                                          <>
+                                            {customerDemandTier ? (
+                                              <span
+                                                className={cn(
+                                                  "text-sm font-semibold leading-none",
+                                                  tierTextClass(
+                                                    customerDemandTier,
+                                                  ),
+                                                )}
+                                                aria-hidden
+                                              >
+                                                {tierPriceArrow(
+                                                  customerDemandTier,
+                                                )}
+                                              </span>
+                                            ) : null}
+                                            <div className="font-bold text-base tabular-nums text-gray-900">
+                                              {formatPrice(basePrice)}
+                                            </div>
+                                          </>
                                         )}
-                                      >
-                                        {customerBulkPricesLoading
-                                          ? "···"
-                                          : formatPrice(basePrice)}
                                       </div>
-                                    </div>
                                   )}
                                   {isExpanded ? (
                                     <ChevronUp className="h-4 w-4 text-gray-400" />
@@ -16982,7 +17091,10 @@ export default function Page() {
                       customerDemandTierFromPrices(
                         bookingPricingServiceId(expandedStyle),
                         dynamicPrices,
-                      ) === "closed";
+                      ) === "closed" &&
+                      !isPaymentProbeService(
+                        bookingPricingServiceId(expandedStyle),
+                      );
                     return (
                       <div className="shrink-0 border-t border-white/20 p-4 space-y-2 bg-white/20 backdrop-blur-md pb-[max(1rem,env(safe-area-inset-bottom,0px))]">
                         <div className="flex items-center justify-end">
@@ -17312,22 +17424,27 @@ export default function Page() {
                   "Matcher..."
                 )
               ) : bookingPaymentPreparing ? (
-                <span className="inline-flex items-center justify-center gap-2">
-                  <Loader2
-                    className="h-4 w-4 shrink-0 animate-spin"
-                    aria-hidden
+                <span className="inline-flex items-center justify-center">
+                  <LoadingState
+                    label={
+                      language === "en"
+                        ? "Authorizing payment"
+                        : "Autoriserer betaling"
+                    }
+                    variant="Drive"
+                    showTimer
+                    className="text-inherit [&_span]:!text-inherit"
                   />
-                  {language === "en"
-                    ? "Authorizing payment…"
-                    : "Autoriserer betaling…"}
                 </span>
               ) : priceLockLoading && !priceLockId ? (
-                <span className="inline-flex items-center justify-center gap-2">
-                  <Loader2
-                    className="h-4 w-4 shrink-0 animate-spin"
-                    aria-hidden
+                <span className="inline-flex items-center justify-center">
+                  <LoadingState
+                    label={
+                      language === "en" ? "Locking price" : "Låser pris"
+                    }
+                    variant="Drive"
+                    showTimer
                   />
-                  {language === "en" ? "Locking price…" : "Låser pris…"}
                 </span>
               ) : (
                 t("confirm_booking")

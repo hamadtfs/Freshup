@@ -25,6 +25,7 @@ import {
   type UsedCapacitySource,
 } from "./used-capacity";
 import { countOnlineProvidersNearby } from "./nearby-online-providers";
+import { isPaymentProbeService } from "./payment-probe";
 
 type AnyClient = ReturnType<typeof createAdminClient>;
 
@@ -305,6 +306,11 @@ export async function buildQuote(
     );
     marketClosed = nearby.marketClosed;
     onlineProvidersNearby = nearby.count;
+  }
+
+  // Payment probe must stay bookable for E2E even with zero nearby supply.
+  if (isPaymentProbeService(serviceId)) {
+    marketClosed = false;
   }
 
   const isHomeVisit = req.deliveryMode === "home";

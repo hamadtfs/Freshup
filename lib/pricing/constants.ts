@@ -14,7 +14,7 @@ export const FRESHUP_COMMISSION_PCT = 0.20;
  * after this many completed bookings. Referral unlocks after the invited person
  * completes their first booking.
  */
-export const LOYALTY_DISCOUNT_BOOKINGS = 2;
+export const LOYALTY_DISCOUNT_BOOKINGS = 5;
 
 /** Provider keep ratio = 1 - commission. Customer price = provider_price / PROVIDER_KEEP_RATIO. */
 export const PROVIDER_KEEP_RATIO = 1 - FRESHUP_COMMISSION_PCT; // 0.80

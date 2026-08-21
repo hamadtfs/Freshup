@@ -30,6 +30,7 @@ import {
   resolveOrderAddonIds,
 } from "@/lib/orders/resolve-order-addons";
 import { resolveCanonicalService } from "@/lib/service-id";
+import { isPaymentProbeService } from "@/lib/pricing/payment-probe";
 import { NextRequest, NextResponse } from "next/server";
 
 interface LockRequestBody {
@@ -122,7 +123,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (quote.marketClosed) {
+    if (quote.marketClosed && !isPaymentProbeService(body.service_id)) {
       return NextResponse.json(
         {
           error: "MARKET_CLOSED",

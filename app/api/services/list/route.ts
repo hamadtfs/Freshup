@@ -1,5 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/server";
 import { withTransientRetry } from "@/lib/supabase/transient";
+import { PAYMENT_PROBE_SERVICE_ID } from "@/lib/pricing/payment-probe";
 import { NextRequest, NextResponse } from "next/server";
 
 function normalizeServiceName(value: unknown): string {
@@ -78,7 +79,6 @@ export async function GET(req: NextRequest) {
         searchParams.get("include_probe") === "true";
       // Internal payment probe service used for live Stripe end-to-end testing.
       // Hidden from normal catalog unless `include_probe=1`.
-      const PAYMENT_PROBE_SERVICE_ID = "classic_cut_m";
       const hierarchy = searchParams.get("hierarchy");
       const mode = searchParams.get("mode");
       const target = searchParams.get("target");

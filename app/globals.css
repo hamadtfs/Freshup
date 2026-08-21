@@ -162,6 +162,41 @@
   }
 }
 
+/* LoadingState (21st.dev-inspired pixel grid) */
+@keyframes pixel-on {
+  0%,
+  100% {
+    opacity: 0.12;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes shimmer-text {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  @keyframes pixel-on {
+    0%,
+    100% {
+      opacity: 0.2;
+    }
+  }
+  @keyframes shimmer-text {
+    0%,
+    100% {
+      background-position: 0 0;
+    }
+  }
+}
+
 /* Sonner: dismiss (X) top-right, fully inside the toast (no hang-off transform) */
 [data-sonner-toast].sonner-toast--close-right {
   /* Room for the inset close control so text doesn’t run under it */

@@ -19,6 +19,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { isTransientUpstreamError, withTransientRetry } from "@/lib/supabase/transient";
 import { resolveAreaIdFromDb, buildQuote } from "@/lib/pricing/server";
 import { countOnlineProvidersNearbyForServices } from "@/lib/pricing/nearby-online-providers";
+import { isPaymentProbeService } from "@/lib/pricing/payment-probe";
 import { DEFAULT_CURRENCY } from "@/lib/pricing";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -136,7 +137,9 @@ export async function GET(req: NextRequest) {
       }
 
       const nearby = nearbyByService.get(serviceId);
-      const marketClosed = nearby?.marketClosed ?? false;
+      const marketClosed = isPaymentProbeService(serviceId)
+        ? false
+        : (nearby?.marketClosed ?? false);
       const onlineNearby = nearby?.count ?? 0;
 
       let entry: BulkQuoteEntry = {

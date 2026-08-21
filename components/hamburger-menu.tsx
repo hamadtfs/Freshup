@@ -4,7 +4,6 @@ import { useState } from "react"
 import { cn } from "@/lib/utils"
 import { formatDisplayPrice } from "@/lib/pricing/format-display-kr"
 import { LOYALTY_DISCOUNT_BOOKINGS } from "@/lib/pricing/constants"
-import { createBrowserSupabaseClient } from "@/lib/supabase/client"
 import {
   X,
   CreditCard,
@@ -28,7 +27,6 @@ import {
   Share2,
   ShieldCheck,
   Wallet,
-  Trash2,
 } from "lucide-react"
 type UserMode = "customer" | "provider"
 type Language = "no" | "en"
@@ -106,7 +104,7 @@ export default function HamburgerMenu({
   userName = "User",
   userAvatarUrl,
   userRating = 4.5,
-  rewardProgress = 0,
+  rewardProgress = 3,
   providerEarningsToday = 0,
   providerEarningsWeek = 8750,
   providerCompletedJobs = 47,
@@ -558,7 +556,7 @@ export default function HamburgerMenu({
         <div className="px-5 pb-4">
           {currentMode === "customer" ? (
             <div className="space-y-2">
-              {/* Loyalty: 20% off (commission waived) after 2 bookings */}
+              {/* Loyalty: 20% off (commission waived) after 5 bookings */}
               <div className="bg-foreground text-background rounded-2xl p-4">
                 <div className="flex items-center justify-between">
                   <div>
@@ -779,58 +777,6 @@ export default function HamburgerMenu({
               <span className="font-medium">{isEn ? "Log in" : "Logg inn"}</span>
             </button>
           )}
-          {signedIn ? (
-            <button
-              onClick={() => {
-                const title = isEn ? "Delete your account?" : "Slette kontoen din?"
-                const body = isEn
-                  ? "This removes your personal data and anonymises your profile. Orders are kept for accounting and audit. This cannot be undone."
-                  : "Dette fjerner personopplysningene dine og anonymiserer profilen. Bestillinger beholdes for regnskap og revisjon. Dette kan ikke angres."
-                if (!window.confirm(`${title}\n\n${body}`)) return
-                void (async () => {
-                  try {
-                    const supabase = createBrowserSupabaseClient()
-                    const { data } = await supabase.auth.getSession()
-                    const token = data?.session?.access_token
-                    const res = await fetch("/api/account/delete", {
-                      method: "POST",
-                      headers: token
-                        ? { Authorization: `Bearer ${token}` }
-                        : {},
-                    })
-                    const payload = (await res.json().catch(() => ({}))) as {
-                      error?: string
-                    }
-                    if (!res.ok) {
-                      const msg =
-                        payload.error === "OPEN_ORDERS"
-                          ? isEn
-                            ? "Finish or cancel open jobs before deleting your account."
-                            : "Fullfør eller avbryt åpne oppdrag før du sletter kontoen."
-                          : isEn
-                            ? "Could not delete account. Try again."
-                            : "Kunne ikke slette kontoen. Prøv igjen."
-                      window.alert(msg)
-                      return
-                    }
-                    onLogout()
-                  } catch {
-                    window.alert(
-                      isEn
-                        ? "Could not delete account. Try again."
-                        : "Kunne ikke slette kontoen. Prøv igjen.",
-                    )
-                  }
-                })()
-              }}
-              className="w-full flex items-center gap-4 p-3 rounded-xl hover:bg-muted transition-colors text-red-500"
-            >
-              <Trash2 className="h-5 w-5" />
-              <span className="font-medium">
-                {isEn ? "Delete account" : "Slett konto"}
-              </span>
-            </button>
-          ) : null}
         </div>
       </div>
 
