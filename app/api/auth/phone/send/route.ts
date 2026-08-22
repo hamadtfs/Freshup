@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { createAnonServerClient } from "@/lib/supabase/server"
-import type { PhoneAuthRole } from "@/lib/auth/phone"
+import { normalizeToE164, type PhoneAuthRole } from "@/lib/auth/phone"
 
 function isHostedSupabaseUrl(): boolean {
   const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || ""
@@ -25,10 +25,10 @@ function unsupportedPhoneProviderMessage(): string {
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as { phone?: string; role?: string }
-    const phone = typeof body.phone === "string" ? body.phone.replace(/\s+/g, "") : ""
+    const phone = typeof body.phone === "string" ? normalizeToE164(body.phone) : null
     const role: PhoneAuthRole = body.role === "provider" ? "provider" : "customer"
 
-    if (!/^\+\d{7,15}$/.test(phone)) {
+    if (!phone) {
       return NextResponse.json({ error: "Invalid phone. Use E.164, e.g. +4712345678" }, { status: 400 })
     }
 

@@ -34,6 +34,7 @@ import {
   metadataRoleFromUser,
   pickDashboardMode,
 } from "@/lib/auth/resolve-account-roles";
+import { normalizeToE164 } from "@/lib/auth/phone";
 import {
   clearNeedProviderLogin,
   peekNeedProviderLogin,
@@ -5506,7 +5507,7 @@ export default function Page() {
   const [isSendingCode, setIsSendingCode] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
 
-  const e164 = (p: string) => p.replace(/\s+/g, "");
+  const e164 = (p: string) => normalizeToE164(p) ?? "";
 
   const sendCode = useCallback(async () => {
     if (!hasSupabase) {

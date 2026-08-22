@@ -1937,11 +1937,7 @@ export default function LoginPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTargets, appMode]);
 
-  const phoneE164 = useMemo(() => {
-    const digits = phone.replace(/\D/g, "").slice(0, 8);
-    if (digits.length < 8) return null;
-    return normalizeToE164(`+47${digits}`);
-  }, [phone]);
+  const phoneE164 = useMemo(() => normalizeToE164(phone), [phone]);
 
   const resolveLoginRole = (): UserType =>
     view === "provider" || isProviderMode ? "provider" : "customer";

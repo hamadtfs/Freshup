@@ -39,6 +39,26 @@ function countryHint(phone: string): string {
   return "unknown";
 }
 
+/**
+ * Twilio requires E.164 (`+47908…`). GoTrue's Send SMS hook payload is often
+ * digits-only (`47908…`), which Twilio rejects as 21211.
+ */
+function toE164(input: string): string | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+  let s = trimmed.replace(/[\s()-]/g, "");
+  if (s.startsWith("00")) s = `+${s.slice(2)}`;
+  if (s.startsWith("+")) {
+    const digits = s.slice(1).replace(/\D/g, "");
+    return digits.length >= 7 && digits.length <= 15 ? `+${digits}` : null;
+  }
+  const digits = s.replace(/\D/g, "");
+  if (digits.length < 8 || digits.length > 15) return null;
+  if (digits.length === 8) return `+47${digits}`;
+  if (digits.startsWith("47")) return `+${digits}`;
+  return `+${digits}`;
+}
+
 async function sendTwilioSms(to: string, body: string): Promise<{
   ok: boolean;
   sid?: string;
@@ -146,10 +166,14 @@ Deno.serve(async (req) => {
     return json(401, { error: "Invalid webhook" });
   }
 
-  const phone = String(user?.phone ?? "").trim();
+  const phoneRaw = String(user?.phone ?? "").trim();
   const otp = String(sms?.otp ?? "").trim();
+  const phone = toE164(phoneRaw);
   if (!phone || !otp) {
-    console.error("[send-sms-hook] missing phone or otp");
+    console.error("[send-sms-hook] missing phone or otp", {
+      has_otp: Boolean(otp),
+      raw: maskPhone(phoneRaw),
+    });
     return json(400, { error: "Missing phone or otp" });
   }
 
@@ -170,6 +194,7 @@ Deno.serve(async (req) => {
       msg: "send-sms-hook twilio",
       to: maskPhone(phone),
       cc: countryHint(phone),
+      e164: phone.startsWith("+"),
       ok: result.ok,
       sid: result.sid ?? null,
       twilio_status: result.status ?? null,

@@ -19,6 +19,7 @@ import {
   Phone,
 } from "lucide-react";
 import { sendPhoneOtpRequest, verifyPhoneSms } from "@/lib/auth/phone-client";
+import { normalizeToE164 } from "@/lib/auth/phone";
 import type { User } from "@supabase/supabase-js";
 import { haversineKm } from "@/lib/geo";
 import { offerCountdownSeconds } from "@/lib/orders/offerCountdown";
@@ -120,11 +121,7 @@ export default function ProviderPage() {
     return () => unsub?.unsubscribe?.();
   }, [hasSupabase, supabase]);
 
-  const phoneE164 = useMemo(() => {
-    const d = phoneLocal.replace(/\D/g, "").slice(0, 8);
-    if (d.length < 8) return null;
-    return `+47${d}`;
-  }, [phoneLocal]);
+  const phoneE164 = useMemo(() => normalizeToE164(phoneLocal), [phoneLocal]);
 
   const sendPhoneCode = async () => {
     setAuthErr(null);
