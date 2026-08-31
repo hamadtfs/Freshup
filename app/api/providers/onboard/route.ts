@@ -2,6 +2,15 @@ import { NextRequest, NextResponse } from "next/server"
 import { createAdminClient } from "@/lib/supabase/server"
 import { SERVICE_ID_ALIASES, serviceIdCandidates } from "@/lib/service-id"
 import { upsertAccountRoleGrant } from "@/lib/auth/account-role-grants"
+import { corsPreflight, withCorsHeaders } from "@/lib/api/cors"
+
+function json(req: NextRequest, body: unknown, init?: ResponseInit) {
+  return withCorsHeaders(req, NextResponse.json(body, init))
+}
+
+export async function OPTIONS(req: NextRequest) {
+  return corsPreflight(req)
+}
 
 interface OnboardingPayload {
   business_name?: string
@@ -444,16 +453,41 @@ export async function POST(req: NextRequest) {
       fromBearer || req.headers.get("x-provider-id")?.trim() || null
 
     if (!providerId) {
-      return NextResponse.json(
+      return json(
+        req,
         { error: "Unauthorized", message: "Sign in with phone before onboarding." },
-        { status: 401 }
+        { status: 401 },
+      )
+    }
+
+    // Same rule as the app: no durable provider rows until phone is verified.
+    const { data: authUser, error: authErr } =
+      await supabase.auth.admin.getUserById(providerId)
+    if (authErr || !authUser?.user) {
+      return json(
+        req,
+        { error: "Unauthorized", message: "Sign in before onboarding." },
+        { status: 401 },
+      )
+    }
+    const phone = String(authUser.user.phone || "").trim()
+    if (!phone) {
+      return json(
+        req,
+        {
+          error: "PHONE_REQUIRED",
+          message:
+            "Verify phone before onboarding. Nothing is written until the number is verified.",
+        },
+        { status: 401 },
       )
     }
 
     if (!payload.mode_selections || payload.mode_selections.length === 0) {
-      return NextResponse.json(
+      return json(
+        req,
         { error: "Must select at least one mode" },
-        { status: 400 }
+        { status: 400 },
       )
     }
 
@@ -481,7 +515,8 @@ export async function POST(req: NextRequest) {
       }
     }
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-      return NextResponse.json(
+      return json(
+        req,
         {
           error: "missing_coordinates",
           message:
@@ -494,12 +529,9 @@ export async function POST(req: NextRequest) {
     payload.lng = lng
 
     const direct = await persistDirect(providerId, payload)
-    return NextResponse.json(direct)
+    return json(req, direct)
   } catch (error) {
     console.error("[v0] Provider onboarding error:", error)
-    return NextResponse.json(
-      { error: "Failed to onboard provider" },
-      { status: 500 }
-    )
+    return json(req, { error: "Failed to onboard provider" }, { status: 500 })
   }
 }

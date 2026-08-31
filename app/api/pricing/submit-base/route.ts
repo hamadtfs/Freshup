@@ -18,7 +18,16 @@ import { resolveCanonicalService } from "@/lib/service-id";
 import { resolveAreaIdFromDb } from "@/lib/pricing/server";
 import { DEFAULT_CURRENCY } from "@/lib/pricing";
 import { UNKNOWN_AREA_ID } from "@/lib/pricing/areas";
+import { corsPreflight, withCorsHeaders } from "@/lib/api/cors";
 import { NextRequest, NextResponse } from "next/server";
+
+function json(req: NextRequest, body: unknown, init?: ResponseInit) {
+  return withCorsHeaders(req, NextResponse.json(body, init));
+}
+
+export async function OPTIONS(req: NextRequest) {
+  return corsPreflight(req);
+}
 
 interface SubmitBasePayload {
   service_id: string;
@@ -37,20 +46,20 @@ export async function POST(req: NextRequest) {
     // middleware sets `x-provider-id` after verifying the bearer token.
     const providerId = req.headers.get("x-provider-id");
     if (!providerId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return json(req, { error: "Unauthorized" }, { status: 401 });
     }
 
     const payload = (await req.json()) as SubmitBasePayload;
 
     if (!payload?.service_id || typeof payload.service_id !== "string") {
-      return NextResponse.json(
+      return json(req, 
         { error: "service_id is required" },
         { status: 400 },
       );
     }
     const price = Number(payload.price);
     if (!Number.isFinite(price) || price <= 0) {
-      return NextResponse.json(
+      return json(req, 
         { error: "price must be a positive number" },
         { status: 400 },
       );
@@ -62,7 +71,7 @@ export async function POST(req: NextRequest) {
       "id",
     );
     if (!canonical) {
-      return NextResponse.json({ error: "Service not found" }, { status: 404 });
+      return json(req, { error: "Service not found" }, { status: 404 });
     }
 
     // Resolve area: explicit lat/lng wins, else fall back to provider_details.
@@ -87,7 +96,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (lat == null || lng == null) {
-      return NextResponse.json(
+      return json(req, 
         {
           error: "AREA_UNKNOWN",
           reason: "missing_coordinates",
@@ -100,7 +109,7 @@ export async function POST(req: NextRequest) {
 
     const { areaId, isKnown } = await resolveAreaIdFromDb(supabase, lat, lng);
     if (!isKnown || areaId === UNKNOWN_AREA_ID) {
-      return NextResponse.json(
+      return json(req, 
         {
           error: "AREA_UNKNOWN",
           reason: "area_resolution_failed",
@@ -129,7 +138,7 @@ export async function POST(req: NextRequest) {
       );
     if (upsertErr) {
       console.error("[pricing] provider_price_inputs upsert error:", upsertErr);
-      return NextResponse.json(
+      return json(req, 
         { error: "Failed to save price input" },
         { status: 500 },
       );
@@ -144,7 +153,7 @@ export async function POST(req: NextRequest) {
       .eq("service_id", canonical.id)
       .maybeSingle();
 
-    return NextResponse.json({
+    return json(req, {
       success: true,
       provider_id: providerId,
       service_id: canonical.id,
@@ -164,7 +173,7 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     console.error("[pricing] submit-base error:", error);
-    return NextResponse.json(
+    return json(req, 
       { error: "Internal server error" },
       { status: 500 },
     );
@@ -180,12 +189,12 @@ export async function GET(req: NextRequest) {
   try {
     const providerId = req.headers.get("x-provider-id");
     if (!providerId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return json(req, { error: "Unauthorized" }, { status: 401 });
     }
 
     const serviceId = req.nextUrl.searchParams.get("service_id");
     if (!serviceId) {
-      return NextResponse.json(
+      return json(req, 
         { error: "service_id is required" },
         { status: 400 },
       );
@@ -198,7 +207,7 @@ export async function GET(req: NextRequest) {
       "id",
     );
     if (!canonical) {
-      return NextResponse.json({ error: "Service not found" }, { status: 404 });
+      return json(req, { error: "Service not found" }, { status: 404 });
     }
 
     const { data, error } = await supabase
@@ -209,16 +218,16 @@ export async function GET(req: NextRequest) {
       .maybeSingle();
     if (error) {
       console.error("[pricing] provider_price_inputs read error:", error);
-      return NextResponse.json(
+      return json(req, 
         { error: "Failed to read price input" },
         { status: 500 },
       );
     }
     if (!data) {
-      return NextResponse.json({ submitted: null });
+      return json(req, { submitted: null });
     }
 
-    return NextResponse.json({
+    return json(req, {
       submitted: {
         price: Number((data as any).price),
         area_id: (data as any).area_id,
@@ -229,7 +238,7 @@ export async function GET(req: NextRequest) {
     });
   } catch (error) {
     console.error("[pricing] submit-base GET error:", error);
-    return NextResponse.json(
+    return json(req, 
       { error: "Internal server error" },
       { status: 500 },
     );

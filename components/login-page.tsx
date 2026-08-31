@@ -26,7 +26,7 @@ import {
 } from "lucide-react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { normalizeToE164 } from "@/lib/auth/phone";
-import { sendPhoneOtpRequest, verifyPhoneSms } from "@/lib/auth/phone-client";
+import { sendPhoneOtpRequest, verifyPhoneSms, fetchRegistrationStatus, sendLinkPhoneOtp, verifyLinkPhoneSms } from "@/lib/auth/phone-client";
 import {
   signInWithOAuthProvider,
   type OAuthProvider,
@@ -1398,6 +1398,10 @@ export default function LoginPage({
   const [completingSignup, setCompletingSignup] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [devOtpFallback, setDevOtpFallback] = useState(false);
+  const [showCustomerRegister, setShowCustomerRegister] = useState(false);
+  const [customerRegisterName, setCustomerRegisterName] = useState("");
+  const [savingCustomerRegister, setSavingCustomerRegister] = useState(false);
+  const [linkPhoneMode, setLinkPhoneMode] = useState(false);
   const [oauthLoading, setOauthLoading] = useState<OAuthProvider | null>(null);
   const [showSummary, setShowSummary] = useState(false);
   const [profileAvatarUrl, setProfileAvatarUrl] = useState("");
@@ -2044,8 +2048,29 @@ export default function LoginPage({
     setSendingOtp(true);
     try {
       const role = resolveLoginRole();
-      const { error } = await sendPhoneOtpRequest(phoneE164, role);
+      const { data: sessionData } = await supabase.auth.getSession();
+      const sessionUser = sessionData.session?.user;
+      const shouldLink =
+        linkPhoneMode || Boolean(sessionUser && !sessionUser.phone);
+
+      if (shouldLink && sessionUser) {
+        setLinkPhoneMode(true);
+        const { error } = await sendLinkPhoneOtp(supabase, phoneE164);
+        if (error) {
+          setAuthError(error.message);
+          return false;
+        }
+        setShowOtp(true);
+        setOtp("");
+        return true;
+      }
+
+      const { error, code } = await sendPhoneOtpRequest(phoneE164, role);
       if (error) {
+        if (code === "PHONE_ON_OAUTH_ACCOUNT") {
+          setAuthError(error);
+          return false;
+        }
         if (
           error.startsWith("DEV_OTP:") ||
           error.includes("Unsupported phone provider")
@@ -2139,6 +2164,30 @@ export default function LoginPage({
     }
     setVerifyingOtp(true);
     try {
+      if (linkPhoneMode) {
+        const { error } = await verifyLinkPhoneSms(supabase, phoneE164, token);
+        if (error) {
+          setAuthError(
+            error.message ||
+              (isEn ? "Verification failed." : "Bekreftelse feilet."),
+          );
+          return false;
+        }
+        setLinkPhoneMode(false);
+        setShowOtp(false);
+        setOtp("");
+        if (view === "provider") {
+          beginProviderSignupInProgress("payment");
+          setProviderSignupResumeStep("payment");
+          onProviderSignupGateChange?.(true);
+          setProviderAuthStep("payment");
+          return true;
+        }
+        const role = resolveLoginRole();
+        onLogin(role === "provider" ? "provider" : "customer");
+        return true;
+      }
+
       const { error } = await verifyPhoneSms(supabase, phoneE164, token);
       if (error) {
         setAuthError(
@@ -2158,6 +2207,14 @@ export default function LoginPage({
         await claimSignupRole(role, { accessToken });
         const uid = sessionData?.session?.user?.id;
         if (uid) {
+          const status = await fetchRegistrationStatus(uid);
+          if (status?.incomplete) {
+            setCustomerRegisterName(
+              String(status.displayName || "").trim(),
+            );
+            setShowCustomerRegister(true);
+            return true;
+          }
           void captureAndSaveCustomerSignupLocationWeb(uid);
         }
         onLogin("customer");
@@ -2208,6 +2265,50 @@ export default function LoginPage({
       return true;
     } finally {
       setVerifyingOtp(false);
+    }
+  };
+
+  const handleCompleteCustomerRegistration = async () => {
+    setAuthError(null);
+    const name = customerRegisterName.trim();
+    if (name.length < 2) {
+      setAuthError(
+        isEn ? "Enter your name to continue." : "Skriv inn navnet ditt for å fortsette.",
+      );
+      return;
+    }
+    setSavingCustomerRegister(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const uid = sessionData?.session?.user?.id;
+      if (!uid) {
+        setAuthError(isEn ? "Session expired. Sign in again." : "Økten utløp. Logg inn på nytt.");
+        return;
+      }
+      await supabase.auth.updateUser({
+        data: { display_name: name, name },
+      });
+      const res = await fetch("/api/customers/me", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "x-user-id": uid,
+        },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setAuthError(
+          body.error ||
+            (isEn ? "Could not save profile." : "Kunne ikke lagre profil."),
+        );
+        return;
+      }
+      void captureAndSaveCustomerSignupLocationWeb(uid);
+      setShowCustomerRegister(false);
+      onLogin("customer");
+    } finally {
+      setSavingCustomerRegister(false);
     }
   };
 
@@ -2392,6 +2493,67 @@ export default function LoginPage({
           </button>
         </div>
       </main>
+    );
+  }
+
+  // ─── Customer Login ────────────────────────────────────────────────────────
+  if (view === "customer" && showCustomerRegister) {
+    return (
+      <>
+        {renderNeedProviderDialog()}
+        <main className="h-[100dvh] w-full max-w-md mx-auto bg-background flex flex-col">
+          <div className="flex items-center justify-between px-4 pt-14 pb-4">
+            <button
+              onClick={() => {
+                void supabase.auth.signOut();
+                setShowCustomerRegister(false);
+                setCustomerRegisterName("");
+                setView("landing");
+              }}
+              className="p-2 -ml-2"
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="flex-1 px-6">
+            <h1 className="text-2xl font-bold text-foreground mb-1">
+              {isEn ? "Complete registration" : "Fullfør registrering"}
+            </h1>
+            <p className="text-muted-foreground text-sm mb-8">
+              {isEn
+                ? "Tell us your name before you continue."
+                : "Fortell oss navnet ditt før du fortsetter."}
+            </p>
+            <input
+              type="text"
+              value={customerRegisterName}
+              onChange={(e) => setCustomerRegisterName(e.target.value)}
+              placeholder={isEn ? "Your name" : "Ditt navn"}
+              className="w-full bg-muted rounded-xl px-4 py-3 mb-4 outline-none"
+              autoFocus
+            />
+            {authError ? (
+              <p className="text-sm text-destructive mb-3">{authError}</p>
+            ) : null}
+            <button
+              type="button"
+              disabled={
+                customerRegisterName.trim().length < 2 || savingCustomerRegister
+              }
+              onClick={() => void handleCompleteCustomerRegistration()}
+              className="w-full py-3.5 bg-foreground text-background rounded-xl font-medium disabled:opacity-40"
+            >
+              {savingCustomerRegister
+                ? isEn
+                  ? "Saving..."
+                  : "Lagrer..."
+                : isEn
+                  ? "Continue"
+                  : "Fortsett"}
+            </button>
+          </div>
+        </main>
+      </>
     );
   }
 
@@ -2760,6 +2922,12 @@ export default function LoginPage({
                 setOtp("");
                 setProviderAuthStep("phone");
               } else if (providerAuthStep === "phone") {
+                if (linkPhoneMode) {
+                  setLinkPhoneMode(false);
+                  setProviderAuthStep("profile");
+                  setProviderSignupResumeStep("profile");
+                  return;
+                }
                 void abandonProviderSignup();
               } else if (providerAuthStep === "payment") {
                 setProviderAuthStep("profile");
@@ -3001,8 +3169,17 @@ export default function LoginPage({
               } else if (providerAuthStep === "otp" && otp.length >= 6) {
                 void handleVerifyOtp();
               } else if (providerAuthStep === "profile" && profileName.length >= 2) {
-                setProviderAuthStep("payment");
-                setProviderSignupResumeStep("payment");
+                void (async () => {
+                  const { data } = await supabase.auth.getSession();
+                  if (data.session?.user && !data.session.user.phone) {
+                    setLinkPhoneMode(true);
+                    setProviderAuthStep("phone");
+                    setProviderSignupResumeStep("phone");
+                    return;
+                  }
+                  setProviderAuthStep("payment");
+                  setProviderSignupResumeStep("payment");
+                })();
               } else if (providerAuthStep === "payment") {
                 if (paymentMethod === "stripe") {
                   setProviderSignupResumeStep("services");

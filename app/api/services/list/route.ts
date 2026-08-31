@@ -1,7 +1,16 @@
 import { createAdminClient } from "@/lib/supabase/server";
 import { withTransientRetry } from "@/lib/supabase/transient";
 import { PAYMENT_PROBE_SERVICE_ID } from "@/lib/pricing/payment-probe";
+import { corsPreflight, withCorsHeaders } from "@/lib/api/cors";
 import { NextRequest, NextResponse } from "next/server";
+
+function json(req: NextRequest, body: unknown, init?: ResponseInit) {
+  return withCorsHeaders(req, NextResponse.json(body, init));
+}
+
+export async function OPTIONS(req: NextRequest) {
+  return corsPreflight(req);
+}
 
 function normalizeServiceName(value: unknown): string {
   return String(value || "")
@@ -158,7 +167,7 @@ export async function GET(req: NextRequest) {
             };
           });
 
-        return NextResponse.json({
+        return json(req, {
           modes: remap(modes),
           targets: remap(targets),
           categories: remap(categories),
@@ -174,7 +183,7 @@ export async function GET(req: NextRequest) {
           .order("id", { ascending: true });
 
         if (error) throw error;
-        return NextResponse.json({ modes });
+        return json(req, { modes });
       }
 
       // If mode only, return targets for that mode
@@ -186,7 +195,7 @@ export async function GET(req: NextRequest) {
           .order("id", { ascending: true });
 
         if (error) throw error;
-        return NextResponse.json({ targets });
+        return json(req, { targets });
       }
 
       // If mode + target, return categories
@@ -199,7 +208,7 @@ export async function GET(req: NextRequest) {
           .order("id", { ascending: true });
 
         if (error) throw error;
-        return NextResponse.json({ categories });
+        return json(req, { categories });
       }
 
       // If mode + target + category, return services
@@ -239,7 +248,7 @@ export async function GET(req: NextRequest) {
 
         const strictServices = keepCanonicalShape(candidateServices);
         if (strictServices.length > 0) {
-          return NextResponse.json({
+          return json(req, {
             services: dedupeServices(strictServices),
           });
         }
@@ -257,19 +266,19 @@ export async function GET(req: NextRequest) {
 
         const compatibleServices = keepCanonicalShape(modeServices || []);
 
-        return NextResponse.json({
+        return json(req, {
           services: dedupeServices(compatibleServices),
         });
       }
 
-      return NextResponse.json(
+      return json(req, 
         { error: "Invalid parameters" },
         { status: 400 },
       );
     });
   } catch (error) {
     console.error("[v0] Services API error:", error);
-    return NextResponse.json(
+    return json(req, 
       { error: "Failed to fetch services" },
       { status: 503 },
     );
