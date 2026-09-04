@@ -46,6 +46,7 @@ import {
   clearProviderSignupInProgress,
   isProviderSignupInProgress,
   peekProviderSignupResumeStep,
+  setProviderSignupPhoneFirst,
 } from "@/lib/auth/provider-signup-gate";
 import {
   Scissors,
@@ -13793,6 +13794,7 @@ export default function Page() {
         onBecomeProviderFromLogin={() => {
           clearNeedProviderLogin();
           setNeedProviderLogin(false);
+          setProviderSignupPhoneFirst(false);
           beginProviderSignupInProgress("profile");
           setProviderSignupGate(true);
         }}
@@ -14449,6 +14451,7 @@ export default function Page() {
         hasCustomerRole={accountRolesUi.has_customer}
         hasProviderRole={accountRolesUi.has_provider}
         onBecomeProvider={() => {
+          setProviderSignupPhoneFirst(false);
           beginProviderSignupInProgress("profile");
           setShowMenu(false);
           setProviderSignupGate(true);

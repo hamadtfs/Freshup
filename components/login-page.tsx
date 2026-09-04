@@ -36,7 +36,9 @@ import {
   beginProviderSignupInProgress,
   clearProviderSignupInProgress,
   isProviderSignupInProgress,
+  isProviderSignupPhoneFirst,
   peekProviderSignupResumeStep,
+  setProviderSignupPhoneFirst,
   setProviderSignupResumeStep,
 } from "@/lib/auth/provider-signup-gate";
 import { writeStoredDashboardMode } from "@/lib/auth/dashboard-mode";
@@ -1407,6 +1409,8 @@ export default function LoginPage({
   const [profileAvatarUrl, setProfileAvatarUrl] = useState("");
   const [processingProfileImage, setProcessingProfileImage] = useState(false);
   const profileImageInputRef = useRef<HTMLInputElement | null>(null);
+  /** Phone-first Become a provider: back from profile returns to number entry. */
+  const providerPhoneFirstRef = useRef(false);
   const [signupCoords, setSignupCoords] = useState<{
     lat: number;
     lng: number;
@@ -1439,6 +1443,8 @@ export default function LoginPage({
             <button
               type="button"
               onClick={() => {
+                providerPhoneFirstRef.current = false;
+                setProviderSignupPhoneFirst(false);
                 setView("provider");
                 setProviderAuthStep("profile");
                 setShowSummary(true);
@@ -1467,6 +1473,14 @@ export default function LoginPage({
   useEffect(() => {
     if (!isProviderSignupInProgress()) return;
     let resume = peekProviderSignupResumeStep() || "profile";
+    // Remount mid-flow: phone/otp means they entered via number; profile+ can
+    // still be phone-first if they already verified (keep prior ref if set).
+    if (resume === "phone" || resume === "otp") {
+      providerPhoneFirstRef.current = true;
+      setProviderSignupPhoneFirst(true);
+    } else if (isProviderSignupPhoneFirst()) {
+      providerPhoneFirstRef.current = true;
+    }
     setView("provider");
     if (resume === "services") {
       setShowSummary(false);
@@ -2157,6 +2171,8 @@ export default function LoginPage({
         return true;
       }
       // Phone verified first — collect profile/payment before durable onboard.
+      providerPhoneFirstRef.current = true;
+      setProviderSignupPhoneFirst(true);
       setProviderAuthStep("profile");
       setProviderSignupResumeStep("profile");
       return true;
@@ -2265,6 +2281,8 @@ export default function LoginPage({
       beginProviderSignupInProgress("profile");
       setProviderSignupResumeStep("profile");
       onProviderSignupGateChange?.(true);
+      providerPhoneFirstRef.current = true;
+      setProviderSignupPhoneFirst(true);
       setProviderAuthStep("profile");
       return true;
     } finally {
@@ -2481,6 +2499,8 @@ export default function LoginPage({
           </button>
           <button
             onClick={() => {
+              providerPhoneFirstRef.current = true;
+              setProviderSignupPhoneFirst(true);
               setView("provider");
               setProviderAuthStep("phone");
               setShowSummary(true);
@@ -2937,8 +2957,22 @@ export default function LoginPage({
                 setProviderAuthStep("profile");
                 setProviderSignupResumeStep("profile");
               } else if (providerAuthStep === "profile") {
-                // Become a provider from an existing customer skipped phone —
-                // back goes home, not to a code they never received.
+                // Phone-first: name/photo → back to number entry (not customer
+                // dashboard). Existing customer / OAuth that skipped phone: leave.
+                if (
+                  providerPhoneFirstRef.current ||
+                  isProviderSignupPhoneFirst()
+                ) {
+                  providerPhoneFirstRef.current = true;
+                  setProviderSignupPhoneFirst(true);
+                  setLinkPhoneMode(false);
+                  setShowOtp(false);
+                  setOtp("");
+                  setProviderAuthStep("phone");
+                  setProviderSignupResumeStep("phone");
+                  beginProviderSignupInProgress("phone");
+                  return;
+                }
                 void abandonProviderSignup();
               } else {
                 void abandonProviderSignup();
