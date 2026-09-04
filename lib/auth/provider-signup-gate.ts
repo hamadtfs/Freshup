@@ -6,6 +6,9 @@ export const PROVIDER_SIGNUP_IN_PROGRESS_KEY =
 export const PROVIDER_SIGNUP_RESUME_STEP_KEY =
   "freshup.provider.signup.resumeStep";
 
+const PROVIDER_SIGNUP_PHONE_FIRST_KEY =
+  "freshup.provider.signup.phoneFirst";
+
 export type ProviderSignupResumeStep =
   | "phone"
   | "otp"
@@ -48,8 +51,24 @@ export function peekProviderSignupResumeStep(): ProviderSignupResumeStep | null 
   return null;
 }
 
+/** True when signup started from phone/OTP (not Become a provider as existing customer). */
+export function setProviderSignupPhoneFirst(phoneFirst: boolean) {
+  if (typeof window === "undefined") return;
+  if (phoneFirst) {
+    sessionStorage.setItem(PROVIDER_SIGNUP_PHONE_FIRST_KEY, "1");
+  } else {
+    sessionStorage.removeItem(PROVIDER_SIGNUP_PHONE_FIRST_KEY);
+  }
+}
+
+export function isProviderSignupPhoneFirst(): boolean {
+  if (typeof window === "undefined") return false;
+  return sessionStorage.getItem(PROVIDER_SIGNUP_PHONE_FIRST_KEY) === "1";
+}
+
 export function clearProviderSignupInProgress() {
   if (typeof window === "undefined") return;
   sessionStorage.removeItem(PROVIDER_SIGNUP_IN_PROGRESS_KEY);
   sessionStorage.removeItem(PROVIDER_SIGNUP_RESUME_STEP_KEY);
+  sessionStorage.removeItem(PROVIDER_SIGNUP_PHONE_FIRST_KEY);
 }
