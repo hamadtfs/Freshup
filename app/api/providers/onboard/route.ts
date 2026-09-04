@@ -455,12 +455,13 @@ export async function POST(req: NextRequest) {
     if (!providerId) {
       return json(
         req,
-        { error: "Unauthorized", message: "Sign in with phone before onboarding." },
+        { error: "Unauthorized", message: "Sign in before onboarding." },
         { status: 401 },
       )
     }
 
-    // Same rule as the app: no durable provider rows until phone is verified.
+    // Google/Apple or phone — any authenticated Auth user can onboard.
+    // Phone on the Auth user is optional (filled into provider_details when present).
     const { data: authUser, error: authErr } =
       await supabase.auth.admin.getUserById(providerId)
     if (authErr || !authUser?.user) {
@@ -470,17 +471,9 @@ export async function POST(req: NextRequest) {
         { status: 401 },
       )
     }
-    const phone = String(authUser.user.phone || "").trim()
-    if (!phone) {
-      return json(
-        req,
-        {
-          error: "PHONE_REQUIRED",
-          message:
-            "Verify phone before onboarding. Nothing is written until the number is verified.",
-        },
-        { status: 401 },
-      )
+    const authPhone = String(authUser.user.phone || "").trim()
+    if (authPhone && !(typeof payload.phone === "string" && payload.phone.trim())) {
+      payload.phone = authPhone
     }
 
     if (!payload.mode_selections || payload.mode_selections.length === 0) {

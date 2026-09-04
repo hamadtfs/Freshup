@@ -1492,6 +1492,10 @@ export default function LoginPage({
       if (name) setProfileName((prev) => prev || name);
       const avatar = String(meta.avatar_url || meta.picture || "").trim();
       if (avatar) setProfileAvatarUrl((prev) => prev || avatar);
+      const phoneRaw = String(user.phone || "")
+        .replace(/\D/g, "")
+        .replace(/^47/, "");
+      if (phoneRaw) setPhone((prev) => prev || phoneRaw.slice(-8));
     });
 
     const params = new URLSearchParams(window.location.search);
@@ -3169,17 +3173,12 @@ export default function LoginPage({
               } else if (providerAuthStep === "otp" && otp.length >= 6) {
                 void handleVerifyOtp();
               } else if (providerAuthStep === "profile" && profileName.length >= 2) {
-                void (async () => {
-                  const { data } = await supabase.auth.getSession();
-                  if (data.session?.user && !data.session.user.phone) {
-                    setLinkPhoneMode(true);
-                    setProviderAuthStep("phone");
-                    setProviderSignupResumeStep("phone");
-                    return;
-                  }
-                  setProviderAuthStep("payment");
-                  setProviderSignupResumeStep("payment");
-                })();
+                // Profile → payout setup → skills. Same as mobile: do not bounce
+                // back to number entry when Auth has no phone on the user object
+                // (phone was already collected, or lives on the customer profile).
+                beginProviderSignupInProgress("payment");
+                setProviderAuthStep("payment");
+                setProviderSignupResumeStep("payment");
               } else if (providerAuthStep === "payment") {
                 if (paymentMethod === "stripe") {
                   setProviderSignupResumeStep("services");
