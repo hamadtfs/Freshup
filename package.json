@@ -3,13 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "next build",
-    "dev": "next dev",
+    "build": "node api.js && next build",
+    "dev": "node api.js && next dev",
     "dispatch:dev": "node --env-file=.env scripts/dev-dispatch-tick.mjs",
     "demand-zones:refresh": "node --env-file=.env scripts/dev-refresh-demand-zones.mjs",
     "payments:release-orphaned-auths": "node --env-file=.env scripts/release-orphaned-auths.mjs",
     "lint": "eslint .",
-    "start": "next start",
+    "start": "node api.js && next start",
     "test": "vitest run",
     "test:watch": "vitest"
   },
